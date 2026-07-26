@@ -6,7 +6,7 @@ umask 077
 POSTGRES_IMAGE='postgres:18.4-bookworm@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296'
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 fail() { printf 'graph upgrade error: %s\n' "$1" >&2; exit 1; }
-mode_of() { stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1"; }
+mode_of() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
 
 for setting in GRAPH_UPGRADE_REQUEST GRAPH_UPGRADE_MUTATION_SQL GRAPH_UPGRADE_EVIDENCE_ROOT DATABASE_HOST DATABASE_PORT DATABASE_NAME POSTGRES_USER POSTGRES_PASSWORD_FILE; do
   eval "value=\${$setting-}"

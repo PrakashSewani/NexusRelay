@@ -6,7 +6,7 @@ POSTGRES_IMAGE='postgres:18.4-bookworm@sha256:1961f96e6029a02c3812d7cb329a3b03a3
 BUSYBOX_IMAGE='busybox:1.37.0-uclibc@sha256:39e0df8c4d65953b55c344f017e1ff2e0031a7454b3c24e6b76d402f207e315a'
 
 mode_of() {
-  stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1"
+  stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"
 }
 
 [ "$#" -eq 2 ] || { printf 'Usage: deploy/operations/verify-backup.sh DATABASE_ARTIFACT CRYPTO_ARTIFACT\n' >&2; exit 2; }
