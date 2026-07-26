@@ -10,6 +10,8 @@ volume="$test_id-data"
 network="$test_id-network"
 migrate_image="$test_id-migrate"
 migrate_secret_volume="$test_id-migrate-secrets"
+postgres_secret_volume="$test_id-postgres-secrets"
+collision_secret_volume="$test_id-collision-secrets"
 secret_dir=$(mktemp -d)
 
 cleanup() {
@@ -18,6 +20,7 @@ cleanup() {
   docker network rm "$network" >/dev/null 2>&1 || true
   docker image rm "$migrate_image" >/dev/null 2>&1 || true
   docker volume rm "$migrate_secret_volume" >/dev/null 2>&1 || true
+  docker volume rm "$postgres_secret_volume" "$collision_secret_volume" >/dev/null 2>&1 || true
   rm -rf "$secret_dir"
 }
 trap cleanup EXIT HUP INT TERM
@@ -29,12 +32,23 @@ write_secret() {
   chmod 0600 "$secret_dir/$name"
 }
 
+publish_postgres_secrets() {
+  target_volume=$1
+  docker volume create "$target_volume" >/dev/null
+  docker run --rm --user 0:0 --network none \
+    --mount "type=bind,src=$secret_dir,dst=/source,readonly" \
+    --mount "type=volume,src=$target_volume,dst=/target" \
+    busybox:1.37.0-uclibc@sha256:39e0df8c4d65953b55c344f017e1ff2e0031a7454b3c24e6b76d402f207e315a \
+    sh -ec 'cp /source/postgres_*_password /target/ && chown 999:999 /target/* && chmod 0400 /target/*'
+}
+
 expect_equivalent_passwords_rejected() {
   collision_container="$test_id-collision"
   collision_volume="$test_id-collision-data"
   printf '%s\n' same-password >"$secret_dir/postgres_gateway_password"
   printf '%s\r\n' same-password >"$secret_dir/postgres_worker_password"
   chmod 0600 "$secret_dir/postgres_gateway_password" "$secret_dir/postgres_worker_password"
+  publish_postgres_secrets "$collision_secret_volume"
   docker volume create "$collision_volume" >/dev/null
   if docker run --name "$collision_container" \
     --env POSTGRES_DB=nexusrelay \
@@ -51,13 +65,14 @@ expect_equivalent_passwords_rejected() {
     --env DATABASE_WORKER_PASSWORD_FILE=/run/secrets/postgres_worker_password \
     --mount "type=volume,src=$collision_volume,dst=/var/lib/postgresql" \
     --mount "type=bind,src=$ROOT_DIR/deploy/postgres/init/10-nexusrelay-roles.sh,dst=/docker-entrypoint-initdb.d/10-nexusrelay-roles.sh,readonly" \
-    --mount "type=bind,src=$secret_dir,dst=/run/secrets,readonly" \
+    --mount "type=volume,src=$collision_secret_volume,dst=/run/secrets,readonly" \
     "$POSTGRES_IMAGE" >/dev/null 2>&1; then
     printf 'equivalent LF/CRLF database passwords unexpectedly accepted\n' >&2
     exit 1
   fi
   docker rm "$collision_container" >/dev/null 2>&1 || true
   docker volume rm "$collision_volume" >/dev/null 2>&1 || true
+  docker volume rm "$collision_secret_volume" >/dev/null 2>&1 || true
   write_secret postgres_gateway_password gateway-test-password
   write_secret postgres_worker_password worker-test-password
 }
@@ -68,6 +83,7 @@ write_secret postgres_gateway_password gateway-test-password
 write_secret postgres_control_plane_password control-test-password
 write_secret postgres_worker_password worker-test-password
 expect_equivalent_passwords_rejected
+publish_postgres_secrets "$postgres_secret_volume"
 
 docker volume create "$volume" >/dev/null
 docker network create "$network" >/dev/null
@@ -87,7 +103,7 @@ docker run --detach --name "$container" \
   --env DATABASE_WORKER_PASSWORD_FILE=/run/secrets/postgres_worker_password \
   --mount "type=volume,src=$volume,dst=/var/lib/postgresql" \
   --mount "type=bind,src=$ROOT_DIR/deploy/postgres/init/10-nexusrelay-roles.sh,dst=/docker-entrypoint-initdb.d/10-nexusrelay-roles.sh,readonly" \
-  --mount "type=bind,src=$secret_dir,dst=/run/secrets,readonly" \
+  --mount "type=volume,src=$postgres_secret_volume,dst=/run/secrets,readonly" \
   "$POSTGRES_IMAGE" >/dev/null
 
 attempt=0

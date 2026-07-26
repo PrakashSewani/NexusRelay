@@ -41,7 +41,9 @@ func run(arguments []string, output io.Writer, client *http.Client) error {
 	if err != nil {
 		return fmt.Errorf("health probe request failed")
 	}
-	defer response.Body.Close()
+	if err := response.Body.Close(); err != nil {
+		return fmt.Errorf("close health probe response: %w", err)
+	}
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf("health probe returned status %d", response.StatusCode)
 	}

@@ -232,6 +232,7 @@ image-build-migrate:
 
 image-pull-cloudflared:
 	docker pull cloudflare/cloudflared:2026.7.3@sha256:e39ee8da81ad5e05d77f38d2f51c60ca51bf2a8450ac3abab50c17fdb91d91bf
+	docker tag cloudflare/cloudflared:2026.7.3@sha256:e39ee8da81ad5e05d77f38d2f51c60ca51bf2a8450ac3abab50c17fdb91d91bf cloudflare/cloudflared:2026.7.3
 
 test:
 	$(MAKE) go-test

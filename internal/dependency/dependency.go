@@ -85,7 +85,7 @@ func redisOptions(redisConfig config.Redis, probeTimeout time.Duration) (*redis.
 		return nil, err
 	}
 	if options.DB != 0 {
-		return nil, fmt.Errorf("Redis database must be zero")
+		return nil, fmt.Errorf("redis database must be zero")
 	}
 
 	// Phase 2 Redis allows only AUTH and PING. RESP2 and these disabled client

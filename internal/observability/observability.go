@@ -10,6 +10,7 @@ import (
 
 	"github.com/PrakashSewani/NexusRelay/internal/config"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -18,6 +19,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 const instrumentationName = "github.com/PrakashSewani/NexusRelay/internal/observability"
@@ -145,8 +147,8 @@ func (r *Runtime) configureMetrics(service, version string) {
 		ConstLabels: prometheus.Labels{"service": service, "version": version},
 	})
 	r.registry.MustRegister(
-		prometheus.NewGoCollector(),
-		prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}),
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		r.httpMetric,
 		r.httpLatency,
 		r.dependencyMetric,
@@ -157,7 +159,7 @@ func (r *Runtime) configureMetrics(service, version string) {
 
 func (r *Runtime) configureTracing(ctx context.Context, service, version string, settings config.Observability) error {
 	if !settings.OTel {
-		provider := trace.NewNoopTracerProvider()
+		provider := noop.NewTracerProvider()
 		r.tracer = provider.Tracer(instrumentationName)
 		otel.SetTracerProvider(provider)
 		return nil

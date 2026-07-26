@@ -146,7 +146,11 @@ func TestRealRedisPingOnlyACL(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := redis.NewClient(clientOptions)
-	defer client.Close()
+	t.Cleanup(func() {
+		if err := client.Close(); err != nil {
+			t.Errorf("close Redis client: %v", err)
+		}
+	})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := client.Ping(ctx).Err(); err != nil {

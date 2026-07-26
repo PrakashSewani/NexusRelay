@@ -19,8 +19,13 @@ vulnerabilities:
       - pkg:golang/google.golang.org/grpc@v1.79.3
     expired_at: 2026-10-26
     statement: The current pinned Atlas 1.2.3 community image embeds this dependency; replacing that approved migration image is outside the Phase 1 CI repair scope.
+  - id: GHSA-hrxh-6v49-42gf
+    purls:
+      - pkg:golang/google.golang.org/grpc@v1.81.1
+    expired_at: 2026-08-26
+    statement: Cloudflared 2026.7.3 is the latest authoritative release and embeds this dependency; review and remove this exception when Cloudflare publishes a fixed image.
   - id: CVE-2026-39822
     purls:
       - pkg:golang/stdlib@v1.26.4
-    expired_at: 2026-10-26
-    statement: The current pinned Atlas 1.2.3 community image was built with this Go version; replacing that approved migration image is outside the Phase 1 CI repair scope.
+    expired_at: 2026-08-26
+    statement: The latest pinned Atlas 1.2.3 and cloudflared 2026.7.3 upstream images were built with this Go version; review and remove this exception when fixed images are published.

@@ -38,15 +38,21 @@ func TestGenerateDevSecretsRefusesIncompleteChangedOrExtraInventory(t *testing.T
 	}{
 		{"missing", func(t *testing.T, directory string) {
 			t.Helper()
-			os.Remove(filepath.Join(directory, "session_secret"))
+			if err := os.Remove(filepath.Join(directory, "session_secret")); err != nil {
+				t.Fatal(err)
+			}
 		}},
 		{"changed", func(t *testing.T, directory string) {
 			t.Helper()
-			os.WriteFile(filepath.Join(directory, "session_secret"), []byte("changed"), 0o600)
+			if err := os.WriteFile(filepath.Join(directory, "session_secret"), []byte("changed"), 0o600); err != nil {
+				t.Fatal(err)
+			}
 		}},
 		{"extra", func(t *testing.T, directory string) {
 			t.Helper()
-			os.WriteFile(filepath.Join(directory, "extra"), []byte("extra"), 0o600)
+			if err := os.WriteFile(filepath.Join(directory, "extra"), []byte("extra"), 0o600); err != nil {
+				t.Fatal(err)
+			}
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {

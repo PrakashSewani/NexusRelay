@@ -353,7 +353,7 @@ func writeNewSecret(directory, name string, contents []byte) error {
 		return fmt.Errorf("create development secret file: unavailable")
 	}
 	if _, err := file.Write(contents); err != nil {
-		file.Close()
+		_ = file.Close()
 		return fmt.Errorf("write development secret file: unavailable")
 	}
 	if err := file.Close(); err != nil {

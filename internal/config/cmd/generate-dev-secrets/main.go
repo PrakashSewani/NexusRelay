@@ -24,13 +24,19 @@ func run(arguments []string, stdout, stderr io.Writer) error {
 	}
 	if flags.NArg() != 0 {
 		err := fmt.Errorf("unexpected positional arguments")
-		fmt.Fprintf(stderr, "development secret generation failed: %v\n", err)
+		if _, writeErr := fmt.Fprintf(stderr, "development secret generation failed: %v\n", err); writeErr != nil {
+			return fmt.Errorf("write development secret generation error: %w", writeErr)
+		}
 		return err
 	}
 	if err := config.GenerateDevSecrets(*outputDirectory); err != nil {
-		fmt.Fprintf(stderr, "development secret generation failed: %v\n", err)
+		if _, writeErr := fmt.Fprintf(stderr, "development secret generation failed: %v\n", err); writeErr != nil {
+			return fmt.Errorf("write development secret generation error: %w", writeErr)
+		}
 		return err
 	}
-	fmt.Fprintf(stdout, "development secret inventory ready at %s\n", *outputDirectory)
+	if _, err := fmt.Fprintf(stdout, "development secret inventory ready at %s\n", *outputDirectory); err != nil {
+		return fmt.Errorf("write development secret generation result: %w", err)
+	}
 	return nil
 }
