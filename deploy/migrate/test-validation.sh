@@ -5,6 +5,7 @@ set +x
 IMAGE=${NEXUSRELAY_MIGRATE_IMAGE:-nexusrelay-migrate:local}
 REDACTION_PROBE='NexusRelayValidationProbe-42'
 TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/nexusrelay-migrate-validation.XXXXXX")
+chmod 0755 "$TMP_DIR"
 
 cleanup() {
   rm -rf "$TMP_DIR"
@@ -26,6 +27,7 @@ printf '%s\n\n' "$REDACTION_PROBE" > "$TMP_DIR/double-newline-password"
 ln -s valid-password "$TMP_DIR/symlink-password"
 dd if=/dev/zero bs=4097 count=1 2>/dev/null | tr '\0' x > "$TMP_DIR/oversize-password"
 printf '\r\n' >> "$TMP_DIR/oversize-password"
+chmod 0444 "$TMP_DIR"/*-password
 
 pass_count=0
 
