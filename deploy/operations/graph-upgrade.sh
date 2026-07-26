@@ -52,7 +52,7 @@ if grep -E '^[[:space:]]*\\' "$GRAPH_UPGRADE_MUTATION_SQL" >/dev/null; then fail
 case "${NEXUSRELAY_POSTGRES_DOCKER_NETWORK-}" in *[!A-Za-z0-9_.-]* ) fail 'NEXUSRELAY_POSTGRES_DOCKER_NETWORK contains unsupported characters' ;; esac
 set --
 if [ -n "${NEXUSRELAY_POSTGRES_DOCKER_NETWORK-}" ]; then set -- --network "$NEXUSRELAY_POSTGRES_DOCKER_NETWORK"; fi
-docker run --rm "$@" --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
+docker run --rm "$@" --read-only --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
   --mount "type=bind,src=$ROOT_DIR/deploy/operations/graph-upgrade-container.sh,dst=/opt/nexusrelay/run.sh,readonly" \
   --mount "type=bind,src=$ROOT_DIR/deploy/postgres/verify-role-graph.sql,dst=/opt/nexusrelay/verify-role-graph.sql,readonly" \
   --mount "type=bind,src=$GRAPH_UPGRADE_REQUEST,dst=/request/request.env,readonly" \
