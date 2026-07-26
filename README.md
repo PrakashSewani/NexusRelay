@@ -4,6 +4,8 @@ NexusRelay is a self-hosted, multi-tenant LLM gateway designed to give applicati
 
 > **Project status:** Phase 1 repository foundation is complete. The repository contains compileable Go service entrypoints, a strict Next.js shell, typed configuration, the versioned control-plane OpenAPI skeleton, pinned non-root images, migration tooling, and CI/security gates. The services currently expose operational scaffolding only, and the checked-in Compose fragment is non-runnable Phase 2 groundwork; PostgreSQL, Redis, Traefik, complete secret mounts, and functional product APIs are not implemented yet. Provider adapters and coding-agent exporters are enabled only after their external contracts are verified from authoritative sources.
 
+Phase 1 accomplishments, preserved foundation decisions, verification evidence, and the Phase 2 boundary are recorded in [`docs/phases/phase-1/README.md`](docs/phases/phase-1/README.md).
+
 ## Problem Statement
 
 Applications that use multiple LLM providers usually inherit provider-specific operational complexity:

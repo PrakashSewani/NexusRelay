@@ -16,7 +16,8 @@ Read the applicable project documentation before designing or implementing chang
 6. `docs/design/15-agent-config-export.md` defines the generic coding-agent exporter framework, agent-specific verification gates, and key-separation rules.
 7. `docs/design/12-requirement-traceability.md` maps requirements to designs and tests.
 8. Accepted ADRs under `docs/adr/` define consequential architecture decisions made after these documents.
-9. `TODO.md` is the implementation handoff sequence. It tracks delivery work but does not override requirements or design documents.
+9. `docs/phases/phase-1/README.md` records the implemented repository foundation, accepted verification evidence, decisions future code must preserve, and explicit non-capabilities. Read it before any code decision that builds on or changes Phase 1 foundations.
+10. `TODO.md` is the implementation handoff sequence. It tracks delivery work but does not override requirements or design documents.
 
 Treat `docs/requirements.md` as authoritative for product scope and the applicable LLD/ADR as authoritative for implementation behavior. Keep them synchronized whenever an approved decision changes.
 
@@ -64,6 +65,7 @@ The gateway, control plane, and worker are separate binaries and Docker containe
 ## Working Rules
 
 - Inspect relevant code, tests, migrations, and documentation before editing.
+- Before making a code decision that changes established tooling, process boundaries, configuration, generated contracts, images, migrations, or CI/security behavior, read `docs/phases/phase-1/README.md` and preserve its accepted foundation unless the authoritative requirements/design/ADR is intentionally updated.
 - At the start of an implementation session, read `TODO.md`, select the earliest unblocked item, and confirm its provider/design prerequisites are complete.
 - Keep `TODO.md` current as implementation progresses. Check an item only after code, tests, generated artifacts, and required documentation are complete.
 - Cite the applicable requirement IDs and design sections in implementation plans, pull requests, or substantial change summaries.
