@@ -50,7 +50,7 @@ input modalities
 output modalities
 sampling parameters
 maximum output tokens
-stop conditions
+operation-specific stop conditions where design 13 permits them (Chat only in V1)
 tools and tool choice
 structured output constraints
 client metadata allowed by policy

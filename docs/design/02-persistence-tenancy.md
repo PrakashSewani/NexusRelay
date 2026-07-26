@@ -34,7 +34,7 @@ updated_at         timestamptz not null
 updated_by          uuid null
 ```
 
-Append-only facts omit update columns and include their own event or occurrence time. Foreign keys involving tenant-owned resources use composite organization-aware constraints where practical to prevent cross-tenant references at the database layer.
+Append-only facts omit update columns and include their own event or occurrence time. Foreign keys involving tenant-owned resources use composite organization-aware constraints; this is mandatory, not a best-effort convention.
 
 ## Tenant Context and RLS
 
@@ -65,6 +65,31 @@ Separate narrowly privileged database roles exist for:
 
 Application services never use the migration owner role.
 
+### Pre-Tenant Lookup Functions
+
+The application roles have no direct unscoped `SELECT` privilege on `users`, `sessions`, `memberships`, `api_keys`, or tenant tables. The closed inventory of pre-tenant read functions is:
+
+| Purpose | Input | Maximum output |
+| --- | --- | --- |
+| Login identity lookup | normalized email | zero or one authentication descriptor containing user ID, status, password hash, auth version, and password-change flag |
+| Session lookup | fixed-length session token HMAC | zero or one session/user descriptor needed for identity validation; no organization permissions or unrelated memberships |
+| API-key lookup | validated lookup prefix | a small schema-enforced maximum candidate set containing key hash/algorithm metadata and the IDs/versions needed to establish organization scope |
+| Organization selection/list | authenticated user/session ID | a bounded page of that user's membership and organization descriptors only |
+| Own-session list | authenticated current session/user ID plus validated cursor/page size | a bounded page of that user's global session metadata only; no token hashes, other users, or tenant permissions |
+
+Each function is owned by a dedicated `NOLOGIN` role, declared `SECURITY DEFINER`, uses a fixed `search_path` containing only `pg_catalog` plus the private application schema, schema-qualifies referenced objects, and accepts typed parameters rather than dynamic SQL. Creation migrations revoke `ALL` from `PUBLIC` and application roles, then grant only `EXECUTE` on each function to the specific login/authentication role that needs it. Functions return named composite types or table columns with a reviewed bounded shape, never arbitrary rows, secrets unrelated to the operation, tenant configuration, or model content. The API-key candidate bound is enforced by uniqueness or a hard function limit and treated as corruption if exceeded.
+
+The closed inventory of mixed-scope mutation functions is separate from the read inventory:
+
+| Purpose | Caller | Input and bounded effect |
+| --- | --- | --- |
+| Tenant member identity resolve/create | tenant control-plane role after `members.manage` and organization context | normalized email plus optional validated new-user fields; returns one user ID/status descriptor, may insert exactly one global user, and cannot read unrelated memberships or mutate an existing identity |
+| Deployment-operator global user disable | deployment identity-administration role | user ID, expected auth version, actor/correlation metadata; locks affected organizations in deterministic order, enforces final-owner safety, disables exactly one global user, and inserts the required per-organization audit/outbox records atomically |
+| Global failed-login audit append | authentication role | bounded keyed identifier hash, normalized network metadata, outcome code, and correlation ID; inserts one restricted global security event and returns no identity or tenant data |
+| Own-session revoke/logout | authenticated identity role | current user ID, target session ID, expected session version, reason, and correlation metadata; revokes exactly one session owned by that user, writes its global security audit event, and cannot affect another user's session |
+
+Mixed-scope mutation functions are owned by dedicated `NOLOGIN` roles, use the same fixed-`search_path`, schema qualification, typed-input, `PUBLIC` revocation, and per-function `EXECUTE` rules as read functions. Their transaction and disclosure behavior is not broadened through a generic global-user or audit function. Function ownership cannot be held by a service login, the migration role is not used at runtime, and callers cannot alter the effective `search_path`. Migration and integration tests inspect `pg_proc`, ownership, ACLs, volatility/security flags, and result shapes/effects; prove direct table access is denied; exercise malicious inputs; and prove no function crosses user or organization scope. Any new pre-tenant or mixed-scope purpose requires design review and an explicit function, grant, bound, and negative test rather than broadening an existing function.
+
 ### Global Tables
 
 The following may be global and are not selected through tenant RLS:
@@ -75,6 +100,24 @@ The following may be global and are not selected through tenant RLS:
 - Global provider type definitions if represented in the database.
 
 Memberships bridge global users into organizations and are tenant-protected. Authentication can look up a user by normalized email but cannot infer or return organization data until session and membership resolution.
+
+### Relationship Matrix
+
+Every tenant parent exposes a candidate key or unique constraint on `(organization_id, id)`. Every tenant child stores `organization_id` and references tenant parents with a composite foreign key `(organization_id, parent_id) -> parent(organization_id, id)`. A redundant tenant ID is intentional defense in depth with RLS.
+
+| Child relationship | Required database constraint |
+| --- | --- |
+| Membership to organization and global user | `organization_id -> organizations.id`; `user_id -> users.id` is the explicit global-table exception |
+| Membership to role | `(organization_id, role_id) -> roles(organization_id, id)` |
+| Role permission to role and global permission | composite role FK; `permission_key -> permissions.key` is the explicit global-catalog exception |
+| Provider secret/job/health row to provider connection | composite provider FK |
+| Gateway model, target, and routing row relationships | composite FKs for every tenant-owned model, provider, target, and policy reference |
+| API key owner and creator attribution | `(organization_id, owner_membership_id) -> memberships(organization_id, id)`; creator membership references are composite when stored, while immutable global actor user IDs may additionally reference `users` |
+| API-key model/provider/rate/budget rows | composite FKs to the key and every referenced tenant model/provider/budget |
+| Request, attempt, usage, price, budget, reservation, analytics, and audit tenant references | composite FKs for mutable/authoritative tenant resources; immutable copied attribution may reference global `users` in addition to copied membership ID |
+| Outbox event/delivery | delivery references the global event ID; tenant event producers must set `organization_id`, and payload loading occurs under that tenant context |
+
+Permitted non-composite references are only: tenant root `organization_id -> organizations.id`, references to explicit global tables (`users`, `permissions`, provider-type catalog, migration/global cryptographic state), and immutable external/public identifiers that are not tenant resource foreign keys. A nullable tenant parent still uses the composite FK when present. A migration introducing or changing a tenant relationship must update this matrix or document why an existing row applies, and tests must attempt a cross-organization insert/update and expect a database constraint failure independent of RLS.
 
 ## Transaction Boundaries
 
@@ -150,6 +193,8 @@ Payload schemas are versioned per topic. Payloads contain IDs, versions, timesta
 
 Workers use a narrow queue-claim role that may read delivery identity, topic, and organization ID globally but not arbitrary tenant payloads or tenant tables. After claiming, the worker starts a tenant transaction, sets organization context, and loads/processes the event payload. Global security events use a separate restricted path and never enter tenant-facing audit queries. An event is fully processed only after all required deliveries complete. Failures increment attempts and schedule bounded exponential backoff with jitter. Permanently failed deliveries remain queryable, alertable, and manually replayable through an audited operator command; they are not silently discarded.
 
+Outbox database privileges are separated by contract. Tenant producer roles may insert an event and its registry-derived delivery rows only inside the same tenant transaction as the source mutation; they cannot claim or complete deliveries. The queue-claim role can select/update only delivery lease fields and the event header `(id, topic, organization_id, created_at)`, never `payload` or tenant rows. After claim, a tenant consumer role sets transaction-local organization context and loads the exact event by `(organization_id, event_id)` under forced RLS. Delivery completion/failure uses a narrow parameterized command keyed by event ID, consumer, claimant, and lease token; it cannot change topic, payload, organization, or another consumer's delivery. Global events use separately granted global producer/consumer functions and an allowlisted topic registry. Tests prove each role cannot perform the other roles' operations, cannot claim payload data, cannot complete an unowned/expired lease, and cannot load a tenant event under a different organization.
+
 ## Configuration Invalidation
 
 Configuration mutation commits an outbox event such as:
@@ -172,7 +217,7 @@ Security-critical revocation/disablement uses the fail-closed deny-marker protoc
 
 ### Critical Deny-Marker State Machine
 
-The shared protocol applies to organizations, sessions, API keys, memberships, roles, users, providers, and models. It covers every authority-reducing mutation, including session revocation, disablement, suspension, expiry shortening, restriction narrowing, permission removal, and provider/model ineligibility:
+The shared protocol applies to organizations, sessions, API keys, memberships, roles, users, provider connections, gateway models, and route targets. It covers every authority-reducing mutation, including session revocation, disablement, suspension, expiry shortening, restriction narrowing, permission removal, and provider/model/target ineligibility:
 
 1. The writer acquires the deployment critical-state advisory lock in shared mode, reads the active epoch, then locks the authoritative PostgreSQL resource row. All critical writers, marker reconcilers, and outbox promoters use this order. The epoch rebuilder acquires the same lock in exclusive mode.
 2. It generates a unique mutation token and uses an epoch-aware Redis script to write a marker containing resource type/ID, `state=temporary`, mutation token, creation time, and intended denied version. The script rejects a stale epoch. The temporary marker has no automatic expiry; an abandoned false denial is safer than automatic re-enablement.
@@ -206,13 +251,16 @@ Mutable resources expose a `version`. Control-plane reads return a strong ETag d
 
 ## Migrations
 
-- Migrations are forward-only and run through the one-shot `migrate` container.
-- The migrator obtains a PostgreSQL advisory lock to prevent concurrent application.
-- Migrations record version, checksum, applied time, and execution duration.
-- Already-applied migration files are immutable.
+- ADR 0007 selects Atlas versioned migrations through a pinned Atlas Community CLI in the one-shot `migrate` container. Repository-owned ordered SQL files remain the V1 source of truth.
+- The committed `atlas.sum` protects migration-directory integrity. CI validates it and fails on generated-file drift.
+- Atlas obtains a PostgreSQL advisory lock to prevent concurrent application; lock or validation failure blocks application startup.
+- The Atlas revision table records version/description, integrity hash, execution timestamp and duration, statement progress, and failure metadata.
+- Already-applied migration files are immutable. Repairs use new forward migrations; normal deployment never rewrites revision history or runs down migrations.
+- Migrations use one transaction per file by default. PostgreSQL-required non-transactional operations need explicit review plus documented partial-failure and retry behavior.
+- Normal deployment preserves linear execution and never uses Atlas dirty-database, baseline, non-linear, or skip-lock overrides.
 - Rolling changes use expand-and-contract: add nullable/new structures, deploy compatible code, backfill, enforce constraints, then remove old structures in a later release.
 - Large backfills are resumable worker operations rather than long blocking migration transactions.
-- CI tests migration from an empty database and from the previous supported release schema.
+- CI tests migration from an empty database and from the previous supported release schema, checksum tampering, lock contention, transactional rollback, and reviewed non-transactional recovery.
 
 ## Backup and Recovery
 
@@ -241,4 +289,4 @@ Mutable resources expose a `version`. Control-plane reads return a strong ETag d
 
 ## Requirement Coverage
 
-This design primarily satisfies FR-ORG-001 through FR-ORG-003, FR-USAGE-008, FR-AUDIT-001, FR-AUDIT-006, FR-CONFIG-002, SEC-005, SEC-011, NFR-001, NFR-007, NFR-009, NFR-010, DATA-002 through DATA-005, and the persistence boundaries in Sections 15 and 16 of the requirements.
+This design primarily satisfies FR-ORG-001 through FR-ORG-003, FR-USAGE-008, FR-AUDIT-001, FR-AUDIT-006, FR-CONFIG-002, SEC-005, SEC-011, SEC-020 through SEC-022, NFR-001, NFR-007, NFR-009, NFR-010, DATA-002 through DATA-005, and the persistence boundaries in Sections 15 and 16 of the requirements.

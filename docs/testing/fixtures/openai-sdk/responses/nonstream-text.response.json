@@ -1,0 +1,35 @@
+{
+  "id": "resp_nr_fixture_001",
+  "object": "response",
+  "created_at": 1785024300,
+  "status": "completed",
+  "error": null,
+  "incomplete_details": null,
+  "model": "nr-responses-sentinel",
+  "output": [
+    {
+      "id": "msg_nr_fixture_001",
+      "type": "message",
+      "status": "completed",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "NR_SENTINEL_OUTPUT_RESPONSE_TEXT",
+          "annotations": []
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "input_tokens": 9,
+    "input_tokens_details": {
+      "cached_tokens": 0
+    },
+    "output_tokens": 5,
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "total_tokens": 14
+  }
+}

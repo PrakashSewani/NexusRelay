@@ -16,11 +16,11 @@ NexusRelay separates latency-sensitive inference, administrative traffic, and as
 | `gateway` | Go gateway binary | Public OpenAI-compatible inference API | None |
 | `control-plane` | Go control-plane binary | Authentication and versioned administrative APIs | None |
 | `worker` | Go worker binary | Outbox, health checks, analytics, reconciliation, retention | None |
-| `migrate` | Go migration command | One-shot forward migration execution | None |
+| `migrate` | Pinned Atlas Community CLI | One-shot validated forward migration execution | None |
 | `postgres` | PostgreSQL | Durable system of record | None |
 | `redis` | Redis | Distributed counters, versions, coordination, short-lived cache | None |
 
-The Go application image contains distinct gateway, control-plane, worker, and migration binaries built from the same source revision. Containers select the relevant binary through their image command.
+The Go application image contains distinct gateway, control-plane, and worker binaries built from the same source revision. The migration container uses the separately pinned Atlas Community CLI and repository-owned SQL migration directory from that revision, as defined by ADR 0007.
 
 ## Network Routes
 
@@ -89,7 +89,7 @@ PostgreSQL and Redis never publish host ports in the production Compose profile.
 ## Startup Sequence
 
 1. PostgreSQL and Redis start and report readiness.
-2. `migrate` obtains a PostgreSQL advisory migration lock and applies pending forward migrations.
+2. `migrate` validates the committed Atlas migration directory and checksum, obtains Atlas's PostgreSQL advisory migration lock, and applies pending forward migrations.
 3. `gateway`, `control-plane`, and `worker` start only after migration success.
 4. `web` starts independently but displays a service-unavailable state until control-plane readiness succeeds.
 5. Traefik obtains/loads certificates and routes only to healthy application containers.

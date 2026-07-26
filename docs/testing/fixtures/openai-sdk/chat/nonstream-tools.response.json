@@ -1,0 +1,31 @@
+{
+  "id": "chatcmpl_nr_fixture_001",
+  "object": "chat.completion",
+  "created": 1785024100,
+  "model": "nr-chat-sentinel",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_nr_fixture_001",
+            "type": "function",
+            "function": {
+              "name": "nr_sentinel_weather",
+              "arguments": "{\"city\":\"NR_SENTINEL_CITY\"}"
+            }
+          }
+        ]
+      },
+      "finish_reason": "tool_calls"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 11,
+    "completion_tokens": 7,
+    "total_tokens": 18
+  }
+}

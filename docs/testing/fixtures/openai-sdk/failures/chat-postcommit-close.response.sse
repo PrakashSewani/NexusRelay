@@ -1,0 +1,4 @@
+data: {"id":"chatcmpl_nr_fixture_fail_001","object":"chat.completion.chunk","created":1785024500,"model":"nr-chat-sentinel","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl_nr_fixture_fail_001","object":"chat.completion.chunk","created":1785024500,"model":"nr-chat-sentinel","choices":[{"index":0,"delta":{"content":"NR_SENTINEL_PARTIAL_OUTPUT"},"finish_reason":null}],"usage":null}
+

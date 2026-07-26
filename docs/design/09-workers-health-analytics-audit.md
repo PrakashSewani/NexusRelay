@@ -53,6 +53,8 @@ Consumers:
 
 Each event has explicit `outbox_deliveries` rows, one per required consumer. Consumers track idempotency in target tables using event ID and mark only their delivery complete. One consumer cannot make the event globally complete while another required delivery is pending.
 
+Database roles enforce the outbox boundary defined in `02-persistence-tenancy.md`: source transactions can insert events and registry-derived deliveries but cannot claim them; the global queue claimant can lease only delivery/header metadata and cannot read payloads; tenant consumers load the claimed event only after setting its `organization_id` under forced RLS; and completion/failure updates require the matching consumer, claimant, and lease token. Global event topics use separate allowlisted producer/consumer functions. Worker code must not combine these grants into one bypass role.
+
 The required delivery registry is code-defined and version-tested:
 
 | Topic | Required consumers |
@@ -230,6 +232,10 @@ Periodically find `in_progress` requests older than operation-specific maximum d
 - Reconcile/release budget and TPM reservations.
 - Emit finalization/analytics outbox event exactly once.
 
+### Redis Limiter Initialization and Recovery
+
+The elected worker loads and verifies the exact versioned Redis Function libraries selected by the application, following ADR 0008. It never replaces a same-named library with a digest mismatch. After fresh Redis initialization or detected limiter-state loss, it publishes a new random limiter epoch with `accept_after` set to the next UTC-minute boundary. Finite-limit traffic remains fail closed until the library, epoch, and boundary are verified. Old function versions are removed only after no old process can call them and their maximum reservation/tombstone TTL has elapsed.
+
 ### Outbox Leases
 
 Reset expired claims, preserve attempt count, and retry. Alert when age or attempts exceed thresholds.
@@ -285,15 +291,16 @@ Metrics avoid organization/provider-connection/request IDs as labels. Logs can i
 - Provider probe failures update health but never affect worker readiness globally.
 - Analytics failure does not block request finalization; lag becomes visible.
 - Retention failure does not trigger unsafe emergency deletion.
-- Redis unavailable delays invalidation publishing and last-used flushing; durable outbox remains pending and retries.
+- Redis unavailable delays invalidation publishing and last-used flushing; durable outbox remains pending and retries. It also blocks finite-limit traffic and limiter reconciliation until the versioned functions and limiter epoch are policy-ready.
 
 ## Verification
 
 - Multi-worker claim, lease expiry, duplicate delivery, and graceful shutdown tests.
+- Outbox producer/claimant/tenant-consumer/global-consumer privilege-separation and cross-organization payload denial tests.
 - Health state threshold, hysteresis, stale observation, and passive classification tests.
 - Analytics duplicate-event, late event, rebuild, estimated/actual separation, and freshness tests.
 - Audit database privilege and secret-redaction tests.
-- Stale request/reservation reconciliation tests.
+- Stale request/reservation reconciliation and Redis function/limiter-epoch recovery tests.
 - Retention batching, cutoff boundary, and foreign-key ordering tests.
 
 ## Requirement Coverage

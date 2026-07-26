@@ -1,0 +1,154 @@
+{
+  "classification": "expected_sanitized_sdk_request_observations_non_normative",
+  "applies_to": [
+    "openai==2.48.0",
+    "openai@6.49.0",
+    "github.com/openai/openai-go/v3@v3.46.0"
+  ],
+  "excluded_from_capture": [
+    "authorization",
+    "user-agent",
+    "sdk-telemetry",
+    "retry-metadata",
+    "connection-framing"
+  ],
+  "observations": [
+    {
+      "id": "models_list",
+      "method": "GET",
+      "path": "/v1/models",
+      "body": null
+    },
+    {
+      "id": "chat_nonstream_tools",
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "body": {
+        "model": "nr-chat-sentinel",
+        "messages": [
+          {
+            "role": "user",
+            "content": "NR_SENTINEL_INPUT_CHAT_TOOL"
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "nr_sentinel_weather",
+              "description": "NR_SENTINEL_TOOL_DESCRIPTION",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "additionalProperties": false
+              },
+              "strict": true
+            }
+          }
+        ],
+        "tool_choice": "required"
+      }
+    },
+    {
+      "id": "chat_stream_tools_usage",
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "body": {
+        "model": "nr-chat-sentinel",
+        "messages": [
+          {
+            "role": "user",
+            "content": "NR_SENTINEL_INPUT_CHAT_STREAM_TOOL"
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "nr_sentinel_weather",
+              "description": "NR_SENTINEL_TOOL_DESCRIPTION",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "additionalProperties": false
+              },
+              "strict": true
+            }
+          }
+        ],
+        "tool_choice": "required"
+      }
+    },
+    {
+      "id": "responses_nonstream_text",
+      "method": "POST",
+      "path": "/v1/responses",
+      "body": {
+        "model": "nr-responses-sentinel",
+        "input": "NR_SENTINEL_INPUT_RESPONSE_TEXT"
+      }
+    },
+    {
+      "id": "responses_stream_tools_usage",
+      "method": "POST",
+      "path": "/v1/responses",
+      "body": {
+        "model": "nr-responses-sentinel",
+        "input": "NR_SENTINEL_INPUT_RESPONSE_STREAM_TOOL",
+        "stream": true,
+        "tools": [
+          {
+            "type": "function",
+            "name": "nr_sentinel_weather",
+            "description": "NR_SENTINEL_TOOL_DESCRIPTION",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "city": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "city"
+              ],
+              "additionalProperties": false
+            },
+            "strict": true
+          }
+        ],
+        "tool_choice": "required"
+      }
+    },
+    {
+      "id": "embeddings_float",
+      "method": "POST",
+      "path": "/v1/embeddings",
+      "body": {
+        "model": "nr-embedding-sentinel",
+        "input": [
+          "NR_SENTINEL_EMBED_A",
+          "NR_SENTINEL_EMBED_B"
+        ],
+        "encoding_format": "float"
+      }
+    }
+  ]
+}

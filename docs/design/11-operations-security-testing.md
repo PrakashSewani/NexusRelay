@@ -48,11 +48,12 @@ A multi-stage build produces static or minimally dynamic binaries:
 nexusrelay-gateway
 nexusrelay-control-plane
 nexusrelay-worker
-nexusrelay-migrate
 nexusrelay-bootstrap
 ```
 
 The runtime image is minimal, includes CA certificates and timezone data, runs as a fixed non-root UID/GID, and has no shell when operational needs allow it.
+
+The one-shot migration image is separate from the Go runtime image. It pins the Apache-2.0 Atlas Community CLI version and release artifact digest, includes only the repository migration directory and required certificate/runtime files, and follows the same non-root, provenance, scanning, and secret-handling requirements. ADR 0007 defines migration behavior.
 
 ### Web Image
 
@@ -92,7 +93,7 @@ REDIS_URL_FILE
 MASTER_KEYRING_FILE
 API_KEY_PEPPER_RING_FILE
 SESSION_SECRET_FILE
-CSRF_SECRET_FILE
+CSRF_SECRET_RING_FILE
 PUBLIC_API_BASE_URL
 ADMIN_BASE_URL
 PUBLIC_API_HOST
@@ -150,7 +151,7 @@ All `*_FILE` values point to regular read-only files. Parsers remove at most one
 
 - `POSTGRES_PASSWORD_FILE` and `DATABASE_PASSWORD_FILE`: UTF-8 password bytes after one trailing newline is removed. The core Compose profile points both settings to the same Docker secret so PostgreSQL initialization and application authentication cannot diverge.
 - `REDIS_URL_FILE`: one absolute `redis://` or `rediss://` URI with credentials percent-encoded as required; maximum 4 KiB.
-- `MASTER_KEYRING_FILE`: versioned JSON key ring defined in `04-providers-secrets.md`; maximum 64 KiB; file permissions must prevent group/world read.
+- `MASTER_KEYRING_FILE`: versioned JSON key ring with `expected_epoch` defined in `04-providers-secrets.md`; maximum 64 KiB; file permissions must prevent group/world read.
 - `API_KEY_PEPPER_RING_FILE`: UTF-8 JSON with the exact V1 shape below; maximum 64 KiB. `version` must be `1`; `active_key_id` must name exactly one entry; entries not active are verify-only. `key_id` matches `[A-Za-z0-9][A-Za-z0-9._-]{0,63}` and each `key` is canonical padded base64 for exactly 32 decoded bytes. Invalid UTF-8, unknown/duplicate fields, trailing JSON values, and duplicate key IDs are rejected. Existing hashes retain their `pepper_key_id`; old peppers are removed only after no hashes reference them or all affected keys are intentionally revoked.
 
 ```json
@@ -163,7 +164,7 @@ All `*_FILE` values point to regular read-only files. Parsers remove at most one
 }
 ```
 - `SESSION_SECRET_FILE`: base64-encoded 32-byte random key used only for keyed session-token hashing/binding. Rotation either retains an explicit verify-only key ring in a future documented format or revokes all sessions; V1 single-key replacement revokes all sessions.
-- `CSRF_SECRET_FILE`: base64-encoded 32-byte random key used only for CSRF token binding. Rotation invalidates outstanding CSRF tokens but not authenticated sessions.
+- `CSRF_SECRET_RING_FILE`: versioned JSON HMAC key ring using the same strict JSON, key-ID, canonical-base64, duplicate-field, and 64 KiB limits as the API-key pepper ring. It has one active 32-byte key and zero or more verify-only keys. The derived token format, bounded overlap, retirement behavior, and absence of per-session CSRF digest storage are defined in `03-identity-access.md`.
 - `ACME_DNS_API_TOKEN_FILE`: opaque provider token interpreted only by the configured ACME DNS provider integration; maximum 8 KiB.
 - `CLOUDFLARE_TUNNEL_CREDENTIALS_FILE`: Cloudflare locally managed tunnel credential JSON matching `CLOUDFLARE_TUNNEL_ID`; maximum 64 KiB.
 - `TAILSCALE_AUTH_KEY_FILE`: one opaque Tailscale auth key after one trailing newline is removed; maximum 4 KiB.
@@ -232,16 +233,17 @@ Trusted proxy count/CIDRs are explicit so source IP cannot be spoofed through fo
 - Use a pinned supported PostgreSQL major version.
 - Application pools have configured per-process maximum/minimum sizes and statement/transaction timeouts. Transaction timeout is enforced through PostgreSQL transaction-local settings; statement timeout is the upper bound for ordinary statements, with explicitly reviewed worker operations allowed a narrower dedicated override.
 - Long-running worker queries use separate pool limits from gateway.
-- Migrations run once through the migrate container and advisory lock.
+- Migrations run once through the pinned Atlas Community CLI container after directory validation and under Atlas's PostgreSQL advisory lock. `atlas.sum`, revision-history integrity, lock contention, and failure recovery are release-tested per ADR 0007. Atlas Cloud and Atlas Pro migration linting are not required.
 - Automated backups include regular full backups plus WAL/point-in-time strategy where operator infrastructure supports it.
 - Restore runbook verifies application startup, RLS, encryption keys, and outbox resumption.
 
 ## Redis Operations
 
+- Use a pinned Redis 7.x release; ADR 0008 selects Redis Functions for the RPM/TPM state machine.
 - Use authentication and private networking.
 - Configure memory policy so critical limiter/version keys are not unpredictably evicted; `noeviction` is preferred for correctness-sensitive deployments with capacity monitoring.
 - Key TTLs are mandatory for rate/reservation/activity structures where appropriate.
-- Lua scripts/functions are loaded/versioned deterministically.
+- The worker loads versioned function libraries side by side, verifies committed source digests, and never replaces a mismatched active library. Gateways may call allowlisted functions but cannot load, replace, flush, delete, or execute arbitrary scripting code.
 - Redis readiness does not imply policy operations are healthy; gateway exposes internal metrics for script failures and latency.
 
 ## Logging
@@ -334,7 +336,7 @@ The core Compose profile must provide one reproducible minimum backup workflow: 
 
 ## Redis Loss Recovery
 
-Redis loss moves critical authorization and finite-limit operations to fail-closed readiness while liveness remains healthy. An elected worker rebuilds the critical epoch under the lock protocol in `02-persistence-tenancy.md`; metrics expose rebuild phase, active epoch, verified resource counts, failure reason, limiter recovery boundary, and fail-closed duration. The runbook defines operator observation and retry actions. Readiness returns healthy only when the critical epoch is verified and required Redis scripts are loaded; provider health and analytics lag do not affect gateway liveness.
+Redis loss moves critical authorization and finite-limit operations to fail-closed readiness while liveness remains healthy. An elected worker rebuilds the critical epoch under the lock protocol in `02-persistence-tenancy.md`, verifies required Redis Function source digests, and initializes the ADR 0008 limiter epoch with acceptance delayed until the next complete UTC minute. Metrics expose rebuild phase, active epochs, verified resource counts, function version/digest status, failure reason, limiter recovery boundary, and fail-closed duration. The runbook defines operator observation and retry actions. Readiness returns healthy only when the critical epoch and required functions are verified; provider health and analytics lag do not affect gateway liveness.
 
 ## Minimum Alert Catalog
 
@@ -348,7 +350,7 @@ Stages:
 2. Go unit tests, race-enabled targeted tests, vet, and lint.
 3. TypeScript lint, typecheck, unit/component tests, and production build.
 4. PostgreSQL/Redis integration tests.
-5. Migration from empty and previous schema.
+5. Atlas migration validation/integrity plus application from empty and previous schema, lock-contention, rollback, and recovery tests.
 6. Provider mock contract tests.
 7. Agent-exporter schema/golden-fixture tests, with OpenCode required for V1 and other agents gated by verified profiles.
 8. OpenAI SDK compatibility tests.
@@ -374,7 +376,7 @@ Deterministic local HTTP servers test auth headers, request translation, streami
 
 ### Compatibility Tests
 
-Official OpenAI SDKs point at the gateway base URL and exercise models, chat non-streaming/streaming, Responses, embeddings, tools, structured output, errors, and cancellation according to the supported matrix.
+The exact official OpenAI SDK pins and deterministic public wire fixtures are defined in [`docs/testing/openai-sdk-compatibility.md`](../testing/openai-sdk-compatibility.md). The implemented harness points each SDK at the gateway base URL and exercises models, chat non-streaming/streaming, Responses, embeddings, tools, structured output, errors, and cancellation according to the supported matrix.
 
 ### End-to-End Tests
 

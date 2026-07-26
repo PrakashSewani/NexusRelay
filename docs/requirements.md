@@ -130,6 +130,7 @@ The names above are default roles. Authorization must depend on permissions, not
 - FR-AUTH-008: Password reset and email delivery are deferred unless configured for the first release. The initial owner may be bootstrapped through a one-time setup flow or deployment command.
 - FR-AUTH-009: Authentication code must expose an internal identity-provider boundary so OIDC can be added without replacing membership or authorization logic.
 - FR-AUTH-010: Tenant administrators may suspend or revoke a user's access to the active organization, but may not terminate that user's sessions or access in unrelated organizations. Global session revocation is limited to the user, password/security lifecycle, or a deployment-operator identity action.
+- FR-AUTH-011: Browser CSRF tokens must be derived from the current server-side session identity and version using a domain-separated HMAC and a rotatable secret ring. The database must not store a CSRF token or digest; session replacement/version change invalidates previously derived tokens.
 
 ### 8.3 Authorization
 
@@ -165,6 +166,7 @@ The names above are default roles. Authorization must depend on permissions, not
 - FR-PROV-009: Provider adapters must declare capabilities such as chat completions, responses, embeddings, streaming, tool calls, JSON output, and usage reporting.
 - FR-PROV-010: Unsupported request features must fail before upstream dispatch with a clear gateway error unless another eligible route supports them.
 - FR-PROV-011: The control-plane service is part of the trusted cryptographic boundary for provider credential creation and rotation and must receive the provider master key ring through a protected mounted secret file. Decryption is permitted only in explicitly reviewed provider-secret workflows and must never be exposed through administrative read APIs.
+- FR-PROV-012: Provider master-key activation must be fenced by durable global cryptographic state identifying the active key and epoch. A process whose configured ring disagrees with that state must fail readiness and reject provider-secret writes until the deployment is consistent.
 
 ### 8.5 Model Registry
 
@@ -177,6 +179,7 @@ The names above are default roles. Authorization must depend on permissions, not
 - FR-MODEL-007: `GET /v1/models` must return only models available to the requesting API key.
 - FR-MODEL-008: Automatic provider model discovery may be offered where supported, but manually configured upstream models must remain supported.
 - FR-MODEL-009: Model changes must take effect without client configuration changes or service restart.
+- FR-MODEL-010: Disabling a route target must immediately make that target ineligible for new attempts across gateway replicas without requiring its gateway model or provider connection to be disabled.
 
 ### 8.6 Gateway API Compatibility
 
@@ -188,7 +191,7 @@ The V1 compatibility target is behavioral compatibility for the documented suppo
 - FR-API-004: V1 must support `POST /v1/chat/completions`, including streaming with server-sent events.
 - FR-API-005: V1 must support `POST /v1/responses`, including streaming, for the subset that can be normalized across eligible adapters.
 - FR-API-006: V1 should support `POST /v1/embeddings` for gateway models whose targets declare embedding capability. It may be released after chat and responses but remains part of V1.
-- FR-API-007: Chat and response APIs must support text input/output, system instructions, temperature and token limits where accepted upstream, tool definitions/tool calls, stop conditions, and structured output where target capabilities permit them.
+- FR-API-007: Chat and response APIs must support text input/output, system instructions, temperature and token limits where accepted upstream, tool definitions/tool calls, and structured output where target capabilities permit them. Chat Completions additionally supports capability-gated `stop`; the V1 Responses subset rejects `stop` because no normalized Responses stop contract is defined.
 - FR-API-008: Streaming responses must preserve the client connection while forwarding normalized upstream events and must stop upstream work when client cancellation is detected where technically possible.
 - FR-API-009: The gateway must generate a unique request ID and return it in a response header.
 - FR-API-010: Responses should include normalized usage when available. Final usage may be unavailable until a stream completes.
@@ -211,6 +214,7 @@ The V1 compatibility target is behavioral compatibility for the documented suppo
 - FR-KEY-010: Key use must update last-used metadata without blocking the request path on synchronous reporting work.
 - FR-KEY-011: API key authentication must distinguish invalid, expired, disabled, and policy-denied states internally while avoiding unnecessary credential information leakage to clients.
 - FR-KEY-012: The control-plane service must receive the API-key pepper ring through a protected mounted secret file so key creation can hash plaintext before its one-time response. Plaintext keys must not cross an asynchronous job or internal service boundary.
+- FR-KEY-013: Every API key must reference its owning organization membership. Request and usage facts must immutably copy both the owner user ID and owner membership ID captured at authentication so later membership or ownership changes do not rewrite history.
 
 ### 8.8 Routing
 
@@ -226,6 +230,7 @@ The V1 compatibility target is behavioral compatibility for the documented suppo
 - FR-ROUTE-010: The routing decision, candidates considered, exclusion reasons, selected target, and fallback attempts must be observable to authorized users.
 - FR-ROUTE-011: Raw prompts and model outputs must not be persisted by default.
 - FR-ROUTE-012: Custom routing rules in V1 are declarative combinations of supported predicates and strategies, not user-executed code.
+- FR-ROUTE-013: For default routing eligibility, `unavailable` is the unhealthy state that excludes a target. `degraded` and `unknown` remain eligible with deterministic ranking penalties, including when stale health is converted to `unknown`; a routing policy may explicitly narrow those defaults but must not silently reinterpret the state names.
 
 ### 8.9 Provider Health
 
@@ -381,6 +386,9 @@ Errors must include an HTTP status, human-readable message, stable code, and req
 - SEC-017: Administrative exposure mode must be explicit and configurable as local/private or public. Production administrative traffic must use HTTPS, and private profiles must enforce their configured network boundary.
 - SEC-018: Trust of forwarding headers must be restricted to configured trusted proxy CIDRs/hops; direct client-supplied forwarding headers must be stripped regardless of ingress provider.
 - SEC-019: Configurable provider headers must reject control characters and transport-owned, framing, hop-by-hop, routing, proxy, forwarding, and host headers. HTTP Host and TLS SNI must derive only from the validated provider URL.
+- SEC-020: Pre-tenant database lookups must use reviewed narrow `SECURITY DEFINER` functions with fixed `search_path`, parameterized inputs, bounded descriptor outputs, non-login ownership, and `EXECUTE` granted only to the service roles that require each function.
+- SEC-021: Tenant-owned relationships must use composite organization-aware foreign keys at the database layer. Exceptions are limited to explicitly documented references to global tables or the organization root and must not permit a tenant row to reference another tenant's resource.
+- SEC-022: Fan-out revocation must use parent resource marker/version checks on every relevant authorization path rather than enumerating and mutating all descendant resources.
 
 ## 12. Reliability and Performance Requirements
 
@@ -468,7 +476,7 @@ The schema is expected to include at least:
 - outbox_deliveries
 - provider_test_jobs
 
-All tenant-owned tables must include an organization identifier and use database constraints and indexes appropriate to tenant-scoped access. Exact table design belongs in an architecture decision record and migration review.
+All tenant-owned tables must include an organization identifier and use composite organization-aware foreign keys, constraints, and indexes appropriate to tenant-scoped access. Only documented global-table and organization-root relationships may use non-composite exceptions; exact relationships are governed by `docs/design/02-persistence-tenancy.md` and migration review.
 
 ## 17. API and Schema Change Policy
 
@@ -485,7 +493,7 @@ All tenant-owned tables must include an organization identifier and use database
 - TEST-003: Provider adapters must have contract tests using deterministic mock upstream servers.
 - TEST-004: At least OpenAI and Anthropic adapters must have opt-in live smoke tests guarded by environment credentials.
 - TEST-005: End-to-end tests must cover owner setup, login, provider creation, model mapping, API key creation, inference, usage visibility, revocation, and budget denial.
-- TEST-006: OpenAI compatibility tests must exercise supported endpoints with an official OpenAI SDK configured to use NexusRelay's base URL.
+- TEST-006: OpenAI compatibility tests must exercise supported endpoints with pinned official OpenAI SDKs configured to use NexusRelay's base URL. The Phase 0 baseline pins representative success and pre/post-commit error wire fixtures. Compatibility expands incrementally with the implemented public surface: Phase 6 proves Models and Chat, and Phase 10 adds Responses and Embeddings. For each implemented endpoint, the gateway suite must cover every reachable public error category/status used by the V1 matrix, request capture, representative validation and authentication failures, pre-commit retry metadata, malformed/oversized sanitized upstream failures, and applicable post-commit stream failure behavior; each SDK runner must retain assertions for raw status, headers, and parseable body/event data even when SDK exception classes differ.
 - TEST-007: Streaming tests must cover cancellation, malformed upstream events, timeouts, and disconnects.
 - TEST-008: Security tests must verify cross-organization denial, privilege denial, secret redaction, API key hashing, and CSRF protection.
 - TEST-009: Load tests must validate the documented concurrency and overhead target before V1 release.
@@ -528,7 +536,7 @@ All tenant-owned tables must include an organization identifier and use database
 
 ### Milestone 5: Provider and Protocol Completion
 
-- Google Gemini, OpenRouter, Ollama, Groq, Xiaomi MiMo, CommandCode Provider API.
+- Google Gemini, OpenRouter, Ollama, and Groq as their profiles reach `contract_verified`; Xiaomi MiMo and CommandCode Provider API only if they pass the explicit provider release decision gate before scope freeze.
 - `/v1/responses` and `/v1/embeddings` supported subsets.
 - Capability matrix and provider-specific documentation.
 - Generic agent-exporter framework and the verified OpenCode connection/model exporter.
@@ -552,7 +560,7 @@ V1 is accepted when all of the following are true:
 - A user can select models and generate a schema-valid configuration through the OpenCode V1 exporter, referencing the configured key environment variable and exposing only the connection/provider entry plus selected models.
 - An official OpenAI SDK can list models and perform non-streaming and streaming requests through NexusRelay.
 - Chat completions and Responses API requests route correctly to at least OpenAI, Anthropic, Gemini, and one custom OpenAI-compatible endpoint.
-- Routing excludes disabled, unhealthy, disallowed, over-budget, and capability-incompatible targets.
+- Routing excludes disabled, `unavailable`, disallowed, over-budget, and capability-incompatible targets. `degraded` and `unknown` targets remain eligible by default with the documented deterministic penalties unless an explicit policy narrows eligibility.
 - Safe failures trigger bounded fallback and record every attempt.
 - API key model/provider restrictions, expiration, revocation, rate limits, and budgets are enforced.
 - Usage and cost can be filtered by organization, user, API key, provider, and model.
@@ -569,8 +577,7 @@ These remaining decisions require an architecture decision record or provider ve
 - External pricing source/import management beyond the manual versioned V1 workflow.
 - Any optional unsafe fail-open mode beyond the secure fail-closed V1 Redis policy.
 - Additions to the supported field matrix defined in `docs/design/13-api-compatibility-matrix.md`.
-- Private network and DNS policy for Ollama and custom provider URLs.
-- Authoritative API specifications and authentication details for Xiaomi MiMo and CommandCode Provider API.
+- Release disposition for Xiaomi MiMo and CommandCode Provider API: before V1 scope freeze, each must either obtain an authoritative contract and reach `contract_verified`, be explicitly redefined by a requirements/design update as a bounded deployment profile, or be removed/deferred from the V1 provider baseline. A blocked profile cannot be implemented or release-supported by inference.
 
 The approved V1 baseline uses separate gateway, control-plane, and worker processes; PostgreSQL request/attempt facts with transactional outbox deliveries; application-scoped repositories plus PostgreSQL RLS; and the secure Redis deny-marker behavior described in `docs/design/`.
 

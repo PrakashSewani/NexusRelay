@@ -1,0 +1,3 @@
+{"error":{"message":"Authentication failed.","type":"authentication_error","code":"authentication_error","request_id":"req_nr_error_auth_001"}}
+{"error":{"message":"Unknown field: metadata.","type":"invalid_request_error","param":"metadata","code":"unknown_field","request_id":"req_nr_error_field_001"}}
+{"error":{"message":"The requested model cannot satisfy the required capability.","type":"invalid_request_error","param":"tools","code":"unsupported_model_capability","request_id":"req_nr_error_cap_001"}}

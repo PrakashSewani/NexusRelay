@@ -162,11 +162,10 @@ Owner receives every permission. Administrator receives every permission except 
 ```text
 id                    uuid primary key
 user_id               uuid not null
-token_hash            bytea not null unique
+  token_hash            bytea not null unique
   auth_version          bigint not null
   session_version       bigint not null default 1
   active_organization_id uuid null
-  csrf_token_digest     bytea not null
 created_at            timestamptz not null
 last_seen_at          timestamptz not null
 idle_expires_at       timestamptz not null
@@ -203,6 +202,18 @@ For tenant administrative requests:
 
 Session and permission data may be cached briefly in Redis, keyed by the full session HMAC plus session, user, organization, membership, role, and role-permission-set versions. Individual revocation synchronously marks the session revoked in PostgreSQL and writes a session deny marker/version before returning; cached descriptors cannot authorize after committed revocation. Every organization suspension, membership suspension/removal, role-permission reduction, and user disablement follows the shared deny-marker protocol. Tenant requests check session, organization, user, membership, and role marker/version state. Identity-only endpoints check session and user state. A successfully verified absence of a resource marker means not denied; unavailable or incomplete critical Redis namespace/version state fails closed as defined in `02-persistence-tenancy.md`. Security-sensitive endpoints force authoritative validation.
 
+Fan-out revocation never enumerates descendant sessions or keys. The exact parent checks are:
+
+| Authorization path | Required marker/version checks |
+| --- | --- |
+| Identity-only browser request | session, user |
+| Tenant browser request | session, user, active organization, active membership, assigned role/permission-set version |
+| API-key authentication/admission | API key, owner user, owner membership, organization |
+| Model listing/routing | all API-key admission parents plus gateway model; each candidate also checks its route target and provider connection |
+| Every provider dispatch/fallback | API key, owner user, owner membership, organization, selected gateway model, selected route target, selected provider connection |
+
+Thus a user marker revokes all of that user's sessions and owned keys, a membership marker revokes that organization's browser access and all keys owned by that membership, a role marker revokes permissions of all assigned memberships, an organization marker revokes all tenant access, a key marker revokes only that key, and provider/model/route-target markers remove those resources from listing/routing/dispatch. Child rows are not rewritten to achieve fan-out. PostgreSQL status/version checks remain authoritative on reload and the critical Redis namespace fails closed when these parent states cannot be verified.
+
 ## Active Organization Selection
 
 - A session may have no active organization immediately after login if the user has multiple memberships or none.
@@ -221,16 +232,29 @@ Session and permission data may be cached briefly in Redis, keyed by the full se
 5. Compare password using Argon2id parameters encoded in the stored hash.
 6. Return the same public failure message for absent, disabled, or incorrect credentials.
 7. In one short transaction, create the server-side session, determine active organization, update last login, and append a redacted login audit event. Every failed login appends a mandatory global security audit event through a separate bounded restricted transaction.
-8. After successful commit, set the session cookie and return a synchronizer CSRF token bound to the session HMAC.
+8. After successful commit, set the session cookie and return the derived CSRF token for the committed session version.
 
 Argon2id parameters are startup-validated and versioned through encoded hashes. Successful login may rehash a password when parameters are outdated.
 
 ## CSRF Design
 
-V1 uses a synchronizer token. A random 256-bit CSRF token is generated with the session, stored as `sessions.csrf_token_digest` using `CSRF_SECRET_FILE`, and returned by `GET /session` and successful login responses. Session creation/replacement and CSRF digest creation commit atomically. It is rotated on login, password change, and session privilege reset. State-changing browser requests require:
+V1 uses a derived session CSRF token and stores no CSRF token or digest. `CSRF_SECRET_RING_FILE` contains one active HMAC key plus retained verify-only keys identified by a non-secret key ID. The exact version-1 MAC input is:
+
+```text
+u16be(18) || UTF-8("NexusRelay CSRF v1") ||
+session_id_uuid_raw_16_bytes ||
+u64be(session_version) ||
+u64be(session_auth_version)
+```
+
+`session_id_uuid_raw_16_bytes` is the RFC 4122/network-order 16-byte UUID representation. Unsigned integers are fixed-width big-endian. No textual UUID, decimal integer, JSON, delimiter-based, or platform-native encoding is permitted. The exact token bytes are `u8(1) || u8(key_id_length) || key_id_ascii || HMAC-SHA-256(mac_input)`, where `key_id_length` is 1 through 64 and the key ID matches the ring identifier grammar. The browser value is unpadded base64url of those bytes. Validation decodes with a strict maximum length, requires exact remaining length after the key ID, selects a retained key by ID, recomputes the MAC, and compares in constant time. The token contains no bearer session secret and is useful only with the `HttpOnly` session cookie. `GET /session` and successful login can derive the token after authoritative session validation without a database write.
+
+Creating/replacing a session or incrementing `session_version` immediately changes the tuple and invalidates the prior token. A CSRF-ring rotation first distributes a ring containing the new active key and old verify key, then switches active key; newly derived tokens use the new ID while old tokens remain valid only for unchanged live sessions during a bounded overlap no longer than the configured CSRF/session cache window. Retirement occurs after that overlap and forces clients presenting an old key ID to refresh with `GET /session`; it does not require session-row migration. Replacing the entire ring without overlap intentionally invalidates all outstanding CSRF tokens but not session cookies.
+
+State-changing browser requests require:
 
 - A valid same-site session cookie.
-- The current CSRF token in `x-csrf-token`, compared against the stored digest in constant time.
+- The current derived CSRF token in `x-csrf-token`, verified against the current session tuple in constant time.
 - A matching custom header on mutation requests.
 - Origin/Referer validation against configured administrative origins as defense in depth.
 
@@ -274,7 +298,11 @@ V1 does not require outbound email invitations. Authorized administrators can:
 - Suspend or reactivate a membership.
 - Suspend or reactivate the user's membership in the active organization.
 
-Because password reset/email is deferred, the V1 onboarding flow is administrator-created user plus a temporary password delivered out of band and `must_change_password = true`. Until changed, the user may authenticate only to the password-change/session endpoints and cannot enter an organization dashboard. Password change verifies the current/temporary password, validates bounded password policy, replaces the Argon2id hash, clears `must_change_password`, updates `password_changed_at`, increments `auth_version`, revokes all existing sessions, creates one replacement session, rotates CSRF state, and inserts the audit event atomically.
+Adding an existing identity and creating a new identity share one explicit transaction contract. The tenant service first authorizes `members.manage` and establishes organization RLS context. It then calls a narrow mixed-scope database function owned/granted under the rules in `02-persistence-tenancy.md`: for an existing normalized email it returns only the user ID/status needed to add membership and never returns the password hash or unrelated memberships; for an absent email it may create the global user only when the request supplies the required temporary-password fields and deployment policy permits creation. Concurrent normalized-email creation is resolved by the global unique constraint and a retry/load of the bounded descriptor. The function never changes an existing user's password, status, display name, or global sessions.
+
+The surrounding transaction creates the tenant membership, validates the same-organization role, preserves the final-owner/system-role rules, and writes tenant audit/outbox records atomically. A new global user additionally writes a restricted global identity audit event in that transaction. If membership creation fails, a newly inserted user is rolled back; an existing user is unchanged. Public responses do not reveal unrelated organization membership, and attempts to add an already-member identity return the tenant-scoped membership conflict. Tenant administrators never receive general global-user search/list authority.
+
+Because password reset/email is deferred, the V1 onboarding flow is administrator-created user plus a temporary password delivered out of band and `must_change_password = true`. Until changed, the user may authenticate only to the password-change/session endpoints and cannot enter an organization dashboard. Password change verifies the current/temporary password, validates bounded password policy, establishes the user parent deny marker, then in one transaction replaces the Argon2id hash, clears `must_change_password`, updates `password_changed_at`, increments `auth_version`, marks all prior sessions revoked, creates exactly one replacement session carrying the new `auth_version` and `session_version = 1`, and inserts the audit/outbox records. The response replaces the cookie and derives CSRF from the replacement session; old cookies fail by both revocation and auth-version mismatch. The replacement session remains fail closed while the user marker is promoted and safely removed against the committed new version, and no old session can become valid during that window. Retrying the password-change command cannot create multiple replacement sessions.
 
 Additional organization creation is not a tenant permission in V1. An explicit deployment-operator command creates the organization, seeded roles/permissions, and initial owner membership atomically and emits restricted global plus tenant audit events. Organization operational settings use a versioned `organization_settings` row for retention defaults, private-network policy defaults, and other documented organization-level behavior; deployment secrets and process settings remain outside it.
 
@@ -339,11 +367,11 @@ Failed login audit records are mandatory global security events when no organiza
 - Permission tests for every administrative operation.
 - Two-organization negative tests for users, roles, and memberships.
 - Concurrent final-owner demotion/removal tests.
-- CSRF, cookie attribute, and origin validation tests.
+- Derived-CSRF canonicalization, key-ID/rotation/retirement, no-digest persistence, cookie attribute, and origin validation tests.
 - Bootstrap single-use and transaction rollback tests.
 - Explicit own/all permission tests for custom roles, forced password-change flow, concurrent bootstrap, session-HMAC collision resistance, organization-only access revocation, and deployment-operator global user-disable tests.
-- Identity-only endpoint tests with no active organization and immediate cached-session revocation tests.
+- Identity-only endpoint tests with no active organization, exact parent-marker matrix tests, immediate cached-session/key revocation tests, mixed global/tenant user-creation races, and replacement-session password-change tests.
 
 ## Requirement Coverage
 
-This design satisfies FR-ORG-002 through FR-ORG-006, FR-AUTH-001 through FR-AUTH-010, FR-RBAC-001 through FR-RBAC-008, relevant FR-AUDIT requirements, SEC-004, SEC-011, SEC-014, and the local-auth V1 acceptance criteria.
+This design satisfies FR-ORG-002 through FR-ORG-006, FR-AUTH-001 through FR-AUTH-011, FR-RBAC-001 through FR-RBAC-008, relevant FR-AUDIT requirements, SEC-004, SEC-011, SEC-014, SEC-020, SEC-022, and the local-auth V1 acceptance criteria.

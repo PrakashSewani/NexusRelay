@@ -1,0 +1,23 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "nr-chat-sentinel",
+      "object": "model",
+      "created": 1785024000,
+      "owned_by": "nexusrelay"
+    },
+    {
+      "id": "nr-responses-sentinel",
+      "object": "model",
+      "created": 1785024001,
+      "owned_by": "nexusrelay"
+    },
+    {
+      "id": "nr-embedding-sentinel",
+      "object": "model",
+      "created": 1785024002,
+      "owned_by": "nexusrelay"
+    }
+  ]
+}

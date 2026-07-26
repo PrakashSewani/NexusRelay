@@ -1,0 +1,120 @@
+{
+  "format_version": 1,
+  "sdk_pins": {
+    "python": {
+      "dependency": "openai==2.48.0",
+      "wheel_sha256": "c98df30aaaf93c51979f64d3e7c5b76464f8be0173368266229eb8fe6bd30f2c"
+    },
+    "javascript": {
+      "dependency": "openai@6.49.0",
+      "npm_integrity": "sha512-aYCc0C6L864eR6WSYIwQGyXriw/nIyZx0ObvhzOEVuk0zoBDpynjSbrionWI7q65B5H8jJX0DXR9snEzM6bfPg=="
+    },
+    "go": {
+      "dependency": "github.com/openai/openai-go/v3@v3.46.0",
+      "go_version": "1.25.0"
+    }
+  },
+  "request_observations": "requests/sdk-request-observations.json",
+  "success_cases": [
+    {
+      "id": "models_list",
+      "method": "GET",
+      "path": "/v1/models",
+      "status": 200,
+      "content_type": "application/json",
+      "x_request_id": "req_nr_models_001",
+      "fixture": "models/list.response.json"
+    },
+    {
+      "id": "chat_nonstream_tools",
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "status": 200,
+      "content_type": "application/json",
+      "x_request_id": "req_nr_chat_001",
+      "fixture": "chat/nonstream-tools.response.json"
+    },
+    {
+      "id": "chat_stream_tools_usage",
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "status": 200,
+      "content_type": "text/event-stream",
+      "x_request_id": "req_nr_chat_stream_001",
+      "fixture": "chat/stream-tools.response.sse"
+    },
+    {
+      "id": "responses_nonstream_text",
+      "method": "POST",
+      "path": "/v1/responses",
+      "status": 200,
+      "content_type": "application/json",
+      "x_request_id": "req_nr_resp_001",
+      "fixture": "responses/nonstream-text.response.json"
+    },
+    {
+      "id": "responses_stream_tools_usage",
+      "method": "POST",
+      "path": "/v1/responses",
+      "status": 200,
+      "content_type": "text/event-stream",
+      "x_request_id": "req_nr_resp_stream_001",
+      "fixture": "responses/stream-tools.response.sse"
+    },
+    {
+      "id": "embeddings_float",
+      "method": "POST",
+      "path": "/v1/embeddings",
+      "status": 200,
+      "content_type": "application/json",
+      "x_request_id": "req_nr_embed_001",
+      "fixture": "embeddings/float.response.json"
+    }
+  ],
+  "precommit_error_records": [
+    {
+      "line": 1,
+      "id": "authentication_error",
+      "status": 401,
+      "content_type": "application/json",
+      "x_request_id": "req_nr_error_auth_001",
+      "retry_headers": "absent"
+    },
+    {
+      "line": 2,
+      "id": "unknown_field",
+      "status": 400,
+      "content_type": "application/json",
+      "x_request_id": "req_nr_error_field_001",
+      "retry_headers": "absent"
+    },
+    {
+      "line": 3,
+      "id": "unsupported_model_capability",
+      "status": 400,
+      "content_type": "application/json",
+      "x_request_id": "req_nr_error_cap_001",
+      "retry_headers": "absent"
+    }
+  ],
+  "precommit_error_fixture": "errors/precommit.responses.jsonl",
+  "postcommit_cases": [
+    {
+      "id": "chat_postcommit_close",
+      "status": 200,
+      "content_type": "text/event-stream",
+      "x_request_id": "req_nr_chat_fail_001",
+      "fixture": "failures/chat-postcommit-close.response.sse",
+      "terminal": "eof_without_done"
+    },
+    {
+      "id": "responses_postcommit_failed",
+      "status": 200,
+      "content_type": "text/event-stream",
+      "x_request_id": "req_nr_resp_fail_001",
+      "fixture": "failures/responses-postcommit-failed.response.sse",
+      "terminal": "response.failed_then_eof"
+    }
+  ],
+  "cancellation_fixture": "failures/cancellation.json"
+}

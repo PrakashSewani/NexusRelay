@@ -225,6 +225,8 @@ Default state behavior:
 
 Health state has a freshness threshold. Stale health becomes `unknown`, not permanently healthy.
 
+Normative acceptance meaning: requirements and release checks that say routing excludes an "unhealthy" target mean a target whose effective health state is `unavailable`. They do not mean `degraded` or `unknown`. Those states remain candidates by default and receive deterministic penalties in every strategy; a versioned routing policy may explicitly exclude either state, in which case the exclusion is recorded as `provider_unhealthy` with the state and policy version in the routing explanation. An emergency policy that admits `unavailable` is opt-in, last-resort behavior and must remain distinguishable from default eligibility.
+
 ## Configuration Caching
 
 The gateway caches organization routing bundles containing models, targets, provider metadata without secrets, policy definitions, and versions. Provider client instances may cache decrypted credentials only in process memory for a short bounded lifetime and are rebuilt when provider/secret version changes.
@@ -236,9 +238,10 @@ org:{org}:policy_version
 key:{key}:version
 provider:{provider}:version
 model:{model}:version
+target:{route_target}:version
 ```
 
-Redis keys use opaque IDs, never plaintext API keys. On Redis failure, non-security configuration may be used within a bounded TTL and then reloaded from PostgreSQL. New key authentication and provider/model dispatch fail closed because critical deny-marker state cannot be verified. Provider disablement and key revocation policy is detailed in the API-key design.
+Redis keys use opaque IDs, never plaintext API keys. The route-target version is compared with the target version captured in the routing/admission snapshot before each dispatch; mismatch or unverifiable state forces reload or denial and never permits dispatch from a stale target descriptor. On Redis failure, non-security configuration may be used within a bounded TTL and then reloaded from PostgreSQL. New key authentication and provider/model/target dispatch fail closed because critical deny-marker state cannot be verified. Provider, target, model, and key disablement policy is detailed in the shared critical-state and API-key designs.
 
 ## Routing Decision Persistence
 
@@ -257,7 +260,7 @@ Do not store prompt-derived text or tool arguments. Candidate snapshots may be n
 ## Administrative Behavior
 
 - Disabling a gateway model removes it from new `/v1/models` responses and rejects new requests.
-- Disabling a target/provider first establishes a synchronous fail-closed Redis deny marker, then commits database state and durable invalidation. The operation fails without committing when Redis cannot establish the marker. Gateways check deny markers before every new dispatch.
+- Disabling a route target or provider connection first establishes the corresponding synchronous fail-closed Redis deny marker, then commits database state and durable invalidation. Route targets have their own marker/version namespace so one target can be disabled without denying sibling targets that use the same model or provider. The operation fails without committing when Redis cannot establish the marker. Gateways check the selected route-target and provider markers before every new dispatch or fallback.
 - Existing in-flight requests may finish on their already selected provider unless disablement is marked emergency/cancel-active in a future feature. V1 disablement affects new attempts.
 - Target reorder and policy change use optimistic versioning and are audited.
 - Model/target validation prevents operation sets with no eligible target at save time, while acknowledging health may later remove all targets.
@@ -267,7 +270,7 @@ Do not store prompt-derived text or tool arguments. Candidate snapshots may be n
 - No visible model: `model_not_found` or disclosure-safe equivalent.
 - Model visible but key restricted: `model_not_allowed`.
 - No capability-compatible target: `invalid_request` with `unsupported_model_capability`.
-- All targets unhealthy/unavailable: `provider_unavailable`.
+- All targets excluded by effective health policy, including all targets `unavailable`: `provider_unavailable`.
 - Attempts exhausted: apply this deterministic precedence, first matching category wins: client cancellation, invalid request/configuration, content filtered, gateway policy denial, total timeout, provider rate limited, provider unavailable, malformed/upstream error, internal persistence error. Preserve every attempt internally and expose only the sanitized mapped error.
 
 ## Verification
@@ -275,12 +278,13 @@ Do not store prompt-derived text or tool arguments. Candidate snapshots may be n
 - Table-driven eligibility tests for every exclusion reason.
 - Deterministic ordering tests with identical snapshots and randomized input map order.
 - Strategy tests for missing prices, insufficient health samples, ties, and stale health.
+- Health acceptance tests proving `degraded` and stale-to-`unknown` remain eligible with penalties by default, `unavailable` is excluded, and explicit policy narrowing/emergency admission is observable and deterministic.
 - Retry/fallback tests by error category, attempt limit, deadline, and commitment state.
 - Permutation tests for exhausted-attempt error precedence and same-target retry slot accounting.
-- Immediate disablement/version invalidation tests across two gateway instances.
+- Immediate model, route-target, and provider disablement/version invalidation tests across two gateway instances.
 - Cross-tenant target-reference database tests.
 - Routing explanation contains no model content or secrets.
 
 ## Requirement Coverage
 
-This design satisfies FR-MODEL-001 through FR-MODEL-009, FR-ROUTE-001 through FR-ROUTE-012, FR-HEALTH-003/004/007 where consumed by routing, NFR-008, and routing-related release acceptance criteria.
+This design satisfies FR-MODEL-001 through FR-MODEL-010, FR-ROUTE-001 through FR-ROUTE-013, FR-HEALTH-003/004/007 where consumed by routing, NFR-008, and routing-related release acceptance criteria.

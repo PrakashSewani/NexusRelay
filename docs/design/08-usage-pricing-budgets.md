@@ -27,6 +27,7 @@ requests
   client_request_id     text null
   api_key_id            uuid not null
   owner_user_id         uuid not null
+  owner_membership_id   uuid not null
   operation             text not null
   gateway_model_id      uuid null
   gateway_model_key     text null
@@ -102,6 +103,7 @@ attempt_usage_records
   request_attempt_id    uuid not null unique
   api_key_id            uuid not null
   owner_user_id         uuid not null
+  owner_membership_id   uuid not null
   gateway_model_id      uuid null
   provider_connection_id uuid not null
   route_target_id       uuid not null
@@ -127,7 +129,7 @@ attempt_usage_records
   occurred_at           timestamptz not null
 ```
 
-One attempt usage fact exists for every dispatched attempt, including failed attempts that may be chargeable. Request-level usage and cost are derived as the sum of attempt facts and may be materialized in a separate `request_usage_totals` row for query performance. This makes provider attribution, fallback cost, budget reconciliation, and idempotency explicit without double-counting.
+One attempt usage fact exists for every dispatched attempt, including failed attempts that may be chargeable. Request-level usage and cost are derived as the sum of attempt facts and may be materialized in a separate `request_usage_totals` row for query performance. `owner_user_id` and `owner_membership_id` are immutable facts copied from the authenticated API-key descriptor at request admission; they are not joined from the key for historical attribution and are never rewritten after ownership transfer, membership suspension, or user changes. This makes owner attribution, provider attribution, fallback cost, budget reconciliation, and idempotency explicit without double-counting.
 
 ## Usage Source Precedence
 
@@ -241,7 +243,7 @@ Basis points avoid floating point percentages.
 For an authenticated request, load all enabled budgets for:
 
 - Organization.
-- API key owner user.
+- API key owner membership captured at admission (and therefore its captured owner user).
 - API key.
 
 Every hard budget must authorize the reservation. Warning-only budgets never reject. Multiple budgets at the same scope/metric are allowed only if explicit semantics are defined; V1 should enforce one active budget per `(scope, metric, period)` to avoid ambiguity.
@@ -375,6 +377,7 @@ Usage list filters use organization, time range, user, key, provider, gateway mo
 - Multi-attempt cost reservation, actual-over-reservation, cancellation, and abandoned request tests.
 - Warning threshold exactly-once tests.
 - Cross-tenant usage and budget denial tests.
+- Historical owner user/membership attribution tests across key transfer, membership suspension, and retention of the global user.
 
 ## Requirement Coverage
 

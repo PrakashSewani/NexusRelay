@@ -1,0 +1,27 @@
+{
+  "format_version": 1,
+  "cases": [
+    {
+      "id": "chat_client_cancel_after_commit",
+      "source_fixture": "../chat/stream-tools.response.sse",
+      "deliver_sse_records": 2,
+      "client_action": "cancel_request_context_and_close_response",
+      "success_terminal_must_not_be_observed": "data: [DONE]",
+      "server_bytes_after_cancel": "not_asserted"
+    },
+    {
+      "id": "responses_client_cancel_after_commit",
+      "source_fixture": "../responses/stream-tools.response.sse",
+      "deliver_sse_records": 3,
+      "client_action": "cancel_request_context_and_close_response",
+      "success_terminal_must_not_be_observed": "response.completed",
+      "server_bytes_after_cancel": "not_asserted"
+    }
+  ],
+  "required_non_wire_assertions": [
+    "provider_request_cancelled",
+    "no_fallback_after_commitment",
+    "request_recorded_as_client_cancelled",
+    "budget_reconciled_to_reported_usage_or_conservative_estimate"
+  ]
+}

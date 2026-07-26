@@ -27,7 +27,7 @@ api_keys
   key_hash              bytea not null
   hash_algorithm_version smallint not null
   pepper_key_id         text not null
-  owner_user_id         uuid not null
+  owner_membership_id   uuid not null
   created_by            uuid not null
   status                text not null  -- active, disabled, revoked
   expires_at            timestamptz null
@@ -40,7 +40,7 @@ api_keys
   updated_at            timestamptz not null
 ```
 
-The owner is attribution/policy metadata, distinct from the creator, and must be an active organization member at creation. Service principals are not a V1 entity; automation keys remain owned by an accountable human member.
+The owner is the referenced organization membership, distinct from the creator, and must be active at creation. The owning user is resolved through that membership; duplicating mutable `owner_user_id` on the key is unnecessary. `(organization_id, owner_membership_id)` has a composite foreign key to memberships. Service principals are not a V1 entity; automation keys remain owned by an accountable human member.
 
 Restrictions use normalized join tables:
 
@@ -97,8 +97,8 @@ No endpoint can retrieve or regenerate the same key. Rotation creates a new key 
 2. Extract lookup prefix without logging the credential.
 3. Resolve a cached key descriptor or query by prefix.
 4. Verify the full key hash in constant time.
-5. Check organization, key status, expiration, and organization status.
-6. Check the Redis deny marker and compare cached key version with Redis critical version state before accepting new work.
+5. Resolve the owner membership/user and check key status/expiration plus owner user, owner membership, and organization status.
+6. Check key, owner-user, owner-membership, and organization parent deny markers/versions before accepting new work.
 7. Return an immutable authentication context containing IDs, restrictions, rates, budget references, and config versions.
 
 Public responses generally use the same 401 error for malformed, unknown, disabled, expired, and revoked credentials to avoid credential enumeration. Internal request records distinguish causes when identity could be safely established.
@@ -116,7 +116,7 @@ Revocation, disablement, expiry shortening, model/provider restriction narrowing
 
 Gateway security behavior:
 
-- Every new request checks the key deny marker; every fallback dispatch rechecks key/provider/model deny markers.
+- Every new request checks key, owner-user, owner-membership, and organization markers; every fallback dispatch rechecks those parents plus the selected gateway model, route target, and provider connection markers.
 - Redis counter mismatch forces cache eviction and authoritative reload.
 - If Redis is unavailable, new inference authentication and new provider dispatches fail closed because immediate revocation/disablement cannot be established.
 - Already committed streams may finish according to their captured authority; they do not start a new fallback attempt while marker state is unavailable.
@@ -134,9 +134,9 @@ Provider and model critical invalidation use the same pattern.
 
 ## Ownership and Visibility
 
-Organization-wide key operations require the corresponding `api_keys.*_all` permission. Owner-scoped operations require `api_keys.*_own` and enforce `owner_user_id = actor_user_id`. Creating a key for another active member requires `api_keys.create_all`; `members.manage` alone is insufficient. Viewer has no key-secret lifecycle permission. These resource policies are enforced in control-plane services. List responses include prefix, status, restrictions, owner, creator, expiry, last-used metadata, and timestamps, never hashes.
+Organization-wide key operations require the corresponding `api_keys.*_all` permission. Owner-scoped operations require `api_keys.*_own` and enforce that `owner_membership_id` is the actor's active membership in the current organization. Creating a key for another active member requires `api_keys.create_all`; `members.manage` alone is insufficient. Viewer has no key-secret lifecycle permission. These resource policies are enforced in control-plane services. List responses include prefix, status, restrictions, owner membership/user display metadata, creator, expiry, last-used metadata, and timestamps, never hashes.
 
-API-key ownership references the organization membership, not only the global user ID. Membership suspension/removal immediately disables owned keys through the critical marker protocol unless ownership is transferred to another active membership in the same transaction. Historical request facts retain copied user attribution.
+API-key ownership references the organization membership. Membership suspension/removal immediately denies every owned key through the membership parent marker without enumerating or rewriting keys. Ownership may be transferred only to another active membership in the same organization in a version-checked transaction; the transfer changes future attribution but never historical request/usage facts. The old membership marker remains authoritative for requests authenticated before transfer, and new authentication must load the new key version/owner descriptor.
 
 ## Last-Used Updates
 
@@ -153,7 +153,7 @@ If storing last-used IP is enabled, retention and UI disclosure are explicit. It
 
 ### Algorithm
 
-Use an atomic Redis Lua script or Redis function implementing a token bucket or generalized cell rate algorithm. The algorithm returns:
+ADR 0008 defines fixed UTC-minute windows implemented by versioned Redis 7 Functions. Redis server `TIME` selects the window; V1 does not use sliding-window, token-bucket, or GCRA semantics. The RPM function returns:
 
 ```text
 allowed
@@ -162,7 +162,7 @@ retry_after
 reset_at
 ```
 
-Keys are scoped by API key ID and limiter version, not plaintext key. Request allowance is consumed after successful authentication and basic request-shape validation but before expensive routing/provider work. Every authenticated denial after this point creates a terminal request fact asynchronously or in the admission transaction; RPM denial itself is written through a bounded denial-record transaction. Policy-rejected authenticated inference attempts count toward RPM to prevent abuse.
+Keys are scoped by API key ID, rate-configuration version, function version, and UTC window, not plaintext key. A server-generated request ID makes retries of one ambiguous Redis operation idempotent; distinct client retries count separately. Request allowance is consumed after successful authentication and basic request-shape validation but before expensive routing/provider work. Every authenticated denial after this point creates a terminal request fact asynchronously or in the admission transaction; RPM denial itself is written through a bounded denial-record transaction. Policy-rejected authenticated inference attempts count toward RPM to prevent abuse.
 
 ### Headers
 
@@ -181,7 +181,9 @@ V1 uses reservation and reconciliation:
 5. On completion, atomically transition `admitted` to `reconciled` using provider-reported actual or explicit estimate. Release and reconciliation leave bounded tombstones so duplicate or late operations cannot recreate allowance.
 6. For streaming cancellation/unknown usage, retain a conservative charge according to policy.
 
-Redis reservation states are `reserved`, `admitted`, `reconciled`, and `released`. TTL is greater than the request total deadline plus shutdown and reconciliation grace. A crash in `reserved` before durable admission may temporarily consume capacity but cannot authorize excess use; reconciliation releases it after the conservative grace. Late operations against an expired/tombstoned reservation fail closed and emit an operational error rather than granting fresh capacity.
+The complete reservation and actual request-level token total are charged to the UTC minute in which admission occurs, including fallback attempts and streams crossing a boundary. Reconciliation refunds only `reserved - actual` or records actual overage in that original window; it never creates fresh capacity. An estimate larger than the configured TPM limit is rejected as oversize without a fabricated useful reset time.
+
+Redis reservation states are `reserved`, `admitted`, `reconciled`, and `released`. TTL is greater than the minute end plus request total deadline, shutdown/reconciliation grace, and duplicate-operation tombstone period. A crash in `reserved` before durable admission may temporarily consume capacity but cannot authorize excess use; reconciliation releases it after the conservative grace. Late operations against an expired/tombstoned reservation fail closed and emit an operational error rather than granting fresh capacity.
 
 The exact Redis implementation and oversize-request behavior require load/concurrency tests. It must never represent an estimate as actual usage in PostgreSQL.
 
@@ -193,7 +195,7 @@ Recommended V1 default:
 - Keys without rate limits do not require Redis solely for rate decisions, but still follow revocation version policy.
 - V1 exposes no fail-open mode. Any future unsafe mode requires a requirements change and ADR.
 
-Rate-limit state is disposable. Redis stores a limiter epoch and bucket/window start. After restart, finite-limit keys fail closed until the next complete configured RPM/TPM window boundary measured from authoritative UTC time, unless a documented conservative reconstruction completes earlier. Responses expose the bounded retry time; keys never receive unconditional fresh allowance.
+Rate-limit state is disposable. Redis stores a random limiter epoch and `accept_after` boundary. After fresh initialization or detected state loss, the elected worker verifies the versioned function library and creates a new epoch that denies finite-limit keys until the next complete UTC-minute boundary measured by Redis server time. V1 does not reconstruct prior buckets. Responses expose the bounded retry time; keys never receive unconditional fresh allowance.
 
 ## Restriction Enforcement
 
@@ -223,7 +225,8 @@ Events store key ID, name/prefix metadata, owner/creator IDs, and redacted chang
 - Database/log/audit/Redis scan proving plaintext and hashes are not exposed incorrectly.
 - Constant-time hash comparison path review and algorithm-version tests.
 - Invalid, expired, disabled, revoked, suspended-organization, and cross-tenant tests.
-- Two-gateway immediate revocation and provider/model invalidation tests.
+- Two-gateway immediate revocation and provider/model/route-target invalidation tests.
+- User/membership/organization parent-marker fan-out tests proving owned keys are denied without child updates, plus ownership-transfer attribution tests.
 - Atomic RPM tests under high concurrency across replicas.
 - TPM reservation/reconciliation, cancellation, expiry, and Redis restart tests.
 - Crash-boundary tests after RPM consumption, TPM reservation, PostgreSQL admission, admitted transition, release, and reconciliation.
@@ -231,4 +234,4 @@ Events store key ID, name/prefix metadata, owner/creator IDs, and redacted chang
 
 ## Requirement Coverage
 
-This design satisfies FR-KEY-001 through FR-KEY-012, FR-RATE-001 through FR-RATE-004, API-key-related FR-MODEL/ROUTE requirements, SEC-003, SEC-014, NFR-009, and key lifecycle release acceptance criteria.
+This design satisfies FR-KEY-001 through FR-KEY-013, FR-RATE-001 through FR-RATE-004, API-key-related FR-MODEL/ROUTE requirements, SEC-003, SEC-014, SEC-022, NFR-009, and key lifecycle release acceptance criteria.

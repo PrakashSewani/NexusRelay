@@ -1,0 +1,15 @@
+event: response.created
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_nr_fixture_fail_001","object":"response","created_at":1785024600,"status":"in_progress","error":null,"incomplete_details":null,"model":"nr-responses-sentinel","output":[],"usage":null}}
+
+event: response.in_progress
+data: {"type":"response.in_progress","sequence_number":1,"response":{"id":"resp_nr_fixture_fail_001","object":"response","created_at":1785024600,"status":"in_progress","error":null,"incomplete_details":null,"model":"nr-responses-sentinel","output":[],"usage":null}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":2,"output_index":0,"item":{"id":"msg_nr_fixture_fail_001","type":"message","status":"in_progress","role":"assistant","content":[]}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":3,"item_id":"msg_nr_fixture_fail_001","output_index":0,"content_index":0,"delta":"NR_SENTINEL_PARTIAL_OUTPUT"}
+
+event: response.failed
+data: {"type":"response.failed","sequence_number":4,"response":{"id":"resp_nr_fixture_fail_001","object":"response","created_at":1785024600,"status":"failed","error":{"code":"server_error","message":"The stream could not be completed.","request_id":"req_nr_resp_fail_001"},"incomplete_details":null,"model":"nr-responses-sentinel","output":[{"id":"msg_nr_fixture_fail_001","type":"message","status":"in_progress","role":"assistant","content":[{"type":"output_text","text":"NR_SENTINEL_PARTIAL_OUTPUT","annotations":[]}]}],"usage":null}}
+

@@ -10,23 +10,24 @@ Completion requires an automated clean-clone installation test in a fresh enviro
 
 ## Phase 0: Decisions and Provider Research
 
-- [ ] Create ADR for Go HTTP/router and control-plane API schema tooling if the choice is consequential.
-- [ ] Create ADR for migration tooling and confirm it supports advisory locking and forward-only migrations.
-- [ ] Create ADR for Redis limiter algorithm and script/version management.
-- [ ] Create `docs/providers/openai.md` from authoritative documentation and mark it `contract_verified`.
-- [ ] Create `docs/providers/anthropic.md` from authoritative documentation and mark it `contract_verified`.
-- [ ] Create `docs/providers/openai-compatible.md` for the reusable custom adapter contract.
-- [ ] Research and create profiles for Gemini, OpenRouter, Ollama, and Groq.
-- [ ] Locate authoritative Xiaomi MiMo and CommandCode API documentation or keep those providers blocked.
-- [ ] Complete `docs/agents/opencode.md`, pin its schema/fixtures, and mark the OpenCode exporter `contract_verified`.
-- [ ] Pin exact official OpenAI SDK versions and commit golden chat, Responses, embeddings, stream, and error fixtures before gateway endpoint implementation.
-- [ ] Research Kilo and CommandCode agent configuration profiles; keep their exporters blocked until authoritative schemas are verified.
+- [x] Create ADR for Go HTTP/router and control-plane API schema tooling if the choice is consequential.
+- [x] Create ADR for migration tooling and confirm it supports advisory locking and forward-only migrations.
+- [x] Create ADR for Redis limiter algorithm and script/version management.
+- [x] Create `docs/providers/openai.md` from authoritative documentation and mark it `contract_verified`.
+- [x] Create `docs/providers/anthropic.md` from authoritative documentation and mark it `contract_verified`.
+- [x] Create `docs/providers/openai-compatible.md` for the reusable custom adapter contract.
+- [x] Research and create profiles for Gemini, OpenRouter, Ollama, and Groq.
+- [x] Locate authoritative Xiaomi MiMo and CommandCode API documentation or keep those providers blocked.
+- [x] Complete `docs/agents/opencode.md`, pin its schema/fixtures, and mark the OpenCode exporter `contract_verified`.
+- [x] Pin exact official OpenAI SDK versions and commit representative golden Chat, Responses, embeddings, stream, and pre/post-commit error fixtures before gateway endpoint implementation; defer exhaustive request capture and public error coverage to the real gateway compatibility suite.
+- [x] Research Kilo and CommandCode agent configuration profiles; keep their exporters blocked until authoritative schemas are verified.
 
 ## Phase 1: Repository Foundation
 
 - [ ] Initialize the Go module and root workspace/tooling files.
 - [ ] Create `apps/gateway`, `apps/control-plane`, and `apps/worker` entrypoints.
-- [ ] Create migration and bootstrap command entrypoints.
+- [ ] Create the authoritative `/api/control/v1` OpenAPI 3.0.3 source-contract skeleton, pinned generator configuration, and drift-validation command selected by ADR 0006.
+- [ ] Integrate the pinned Atlas migration container/configuration and create the bootstrap command entrypoint.
 - [ ] Scaffold `apps/web` with strict TypeScript, linting, typecheck, and tests.
 - [ ] Add shared Makefile/task scripts without hiding required commands.
 - [ ] Add formatting, lint, unit-test, build, secret-scan, and dependency-scan CI.
@@ -65,6 +66,7 @@ Completion requires an automated clean-clone installation test in a fresh enviro
 ## Phase 4: Identity, Organizations, and RBAC
 
 - [ ] Implement one-time owner/organization bootstrap.
+- [ ] Define the authentication, session, organization, membership, role, permission, and bootstrap OpenAPI paths/schemas before implementing their HTTP handlers.
 - [ ] Implement Argon2id password hashing and rehash-on-login behavior.
 - [ ] Implement login throttling with generic failure responses and mandatory failed-login security audit events.
 - [ ] Implement server-side sessions, secure cookies, CSRF, expiry, and revocation.
@@ -77,6 +79,7 @@ Completion requires an automated clean-clone installation test in a fresh enviro
 ## Phase 5: Provider Connections and Secrets
 
 - [ ] Implement AES-256-GCM provider credential envelopes and key-ring startup validation.
+- [ ] Define provider connection, secret-rotation, test-job, and model-discovery OpenAPI paths/schemas before implementing their HTTP handlers.
 - [ ] Implement bounded online credential re-encryption/key rotation.
 - [ ] Implement provider connection CRUD, enable/disable, secret rotation, audit events, and shared deny-marker integration.
 - [ ] Implement SSRF-safe URL validation, DNS resolution, dialing, redirect policy, and private-network policies.
@@ -88,13 +91,14 @@ Completion requires an automated clean-clone installation test in a fresh enviro
 ## Phase 6: Models, API Keys, and Gateway Protocol
 
 - [ ] Implement gateway models, route targets, routing policies, pricing references, and optimistic concurrency.
+- [ ] Define model, routing, API-key, pricing, and budget OpenAPI paths/schemas before implementing their control-plane HTTP handlers.
 - [ ] Implement API-key generation, prefix lookup, keyed hashing, one-time display, ownership, restrictions, expiry, disablement, and revocation.
 - [ ] Integrate API keys and models with the shared fail-closed deny-marker/version infrastructure and add multi-replica invalidation tests.
 - [ ] Implement `GET /v1/models` filtered by key and enabled model state.
 - [ ] Implement normalized inference domain and strict transport validation.
 - [ ] Implement `POST /v1/chat/completions` non-streaming and SSE streaming according to the compatibility matrix.
 - [ ] Implement stable errors, request IDs, body limits, timeout stages, cancellation, and bounded backpressure.
-- [ ] Add official OpenAI SDK compatibility tests and privacy sentinel tests.
+- [ ] Add official OpenAI SDK compatibility and privacy-sentinel tests for `/v1/models` and Chat, including exhaustive reachable errors, request capture, streaming failure, and cancellation behavior for the Phase 6 surface.
 
 ## Phase 7: Routing, Usage, Limits, and Budgets
 
@@ -122,7 +126,7 @@ Completion requires an automated clean-clone installation test in a fresh enviro
 
 ## Phase 9: Control Plane and Web Dashboard
 
-- [ ] Define/version the control-plane API contract and generate clients/types.
+- [ ] Complete the control-plane API contract for remaining usage, analytics, audit, settings, and dashboard flows; regenerate and verify all clients/types.
 - [ ] Implement endpoint permission/resource-policy matrix.
 - [ ] Build login, organization selection, overview, provider, model, routing, API-key, user, role, budget, usage, analytics, audit, and settings pages.
 - [ ] Implement explicit loading, empty, partial, stale, permission-denied, validation, and service-error states.
@@ -131,6 +135,7 @@ Completion requires an automated clean-clone installation test in a fresh enviro
 
 ## Phase 10: Agent Export and Remaining V1 Protocols
 
+- [ ] Before V1 scope freeze, record the verify/redefine/defer disposition for Xiaomi MiMo and CommandCode Provider API and update requirements/provider ledgers before implementation or release claims.
 - [ ] Implement the generic agent-exporter registry and versioned preview/render control-plane contract.
 - [ ] Implement the verified OpenCode exporter using the configured public base URL and shared key environment-variable name.
 - [ ] Restrict every export to the selected key/model intersection and connection/model-only settings.
@@ -138,6 +143,7 @@ Completion requires an automated clean-clone installation test in a fresh enviro
 - [ ] Add Kilo, CommandCode, or other exporters only after their agent profiles reach `contract_verified`.
 - [ ] Implement the documented Responses API subset.
 - [ ] Implement the documented Embeddings API subset.
+- [ ] Extend the pinned official OpenAI SDK compatibility harness to Responses and Embeddings, including their exhaustive reachable errors, streaming/failure behavior, and request capture.
 - [ ] Complete verified Gemini, OpenRouter, Ollama, Groq, Xiaomi MiMo, and CommandCode adapters as profiles become ready.
 
 ## Phase 11: Release Hardening

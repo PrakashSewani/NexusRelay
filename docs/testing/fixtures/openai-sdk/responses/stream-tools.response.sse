@@ -1,0 +1,18 @@
+event: response.created
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_nr_fixture_stream_001","object":"response","created_at":1785024400,"status":"in_progress","error":null,"incomplete_details":null,"model":"nr-responses-sentinel","output":[],"usage":null}}
+
+event: response.in_progress
+data: {"type":"response.in_progress","sequence_number":1,"response":{"id":"resp_nr_fixture_stream_001","object":"response","created_at":1785024400,"status":"in_progress","error":null,"incomplete_details":null,"model":"nr-responses-sentinel","output":[],"usage":null}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":2,"output_index":0,"item":{"id":"fc_nr_fixture_stream_001","type":"function_call","status":"in_progress","call_id":"call_nr_fixture_response_001","name":"nr_sentinel_weather","arguments":""}}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","sequence_number":3,"item_id":"fc_nr_fixture_stream_001","output_index":0,"delta":"{\"city\":\"NR_SENTINEL_CITY\"}"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":4,"output_index":0,"item":{"id":"fc_nr_fixture_stream_001","type":"function_call","status":"completed","call_id":"call_nr_fixture_response_001","name":"nr_sentinel_weather","arguments":"{\"city\":\"NR_SENTINEL_CITY\"}"}}
+
+event: response.completed
+data: {"type":"response.completed","sequence_number":5,"response":{"id":"resp_nr_fixture_stream_001","object":"response","created_at":1785024400,"status":"completed","error":null,"incomplete_details":null,"model":"nr-responses-sentinel","output":[{"id":"fc_nr_fixture_stream_001","type":"function_call","status":"completed","call_id":"call_nr_fixture_response_001","name":"nr_sentinel_weather","arguments":"{\"city\":\"NR_SENTINEL_CITY\"}"}],"usage":{"input_tokens":13,"input_tokens_details":{"cached_tokens":0},"output_tokens":6,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":19}}}
+

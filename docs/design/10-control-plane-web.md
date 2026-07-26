@@ -40,7 +40,9 @@ Error shape:
 
 Field errors use stable field paths and codes. Internal errors and inaccessible cross-tenant resource details are not exposed.
 
-The authoritative control-plane contract is a versioned OpenAPI document. It defines every request/response schema, nullability rule, endpoint permission and resource scope, filter, cursor, ETag/precondition, status/error set, and cache policy. Generated server/client types derive from that document; this route inventory is explanatory and does not replace it.
+The authoritative control-plane contract is repository-owned OpenAPI 3.0.3 YAML. It defines every request/response schema, nullability rule, endpoint permission and resource scope, filter, cursor, ETag/precondition, status/error set, and cache policy. Per ADR 0006, `oapi-codegen` generates strict Chi server bindings and Go transport models, while `openapi-typescript` generates web types. Generated artifacts are committed, regenerated in CI, and never edited manually; this route inventory is explanatory and does not replace the source contract.
+
+Generated strict handlers do not replace runtime request validation. The same loaded OpenAPI contract validates parameters and bodies before application-service invocation, and NexusRelay maps validation failures into the stable sanitized control-plane error envelope. Generated transport types remain at the HTTP boundary and must not be imported by domain, persistence, authorization, provider, routing, or usage packages.
 
 ## API Resource Groups
 
@@ -56,7 +58,7 @@ DELETE /session/sessions/{id}
 POST   /session/change-password
 ```
 
-`GET /session` returns current user, active organization, memberships safe for organization switching, and effective permission keys. It never returns password/session token details.
+`GET /session` returns current user, active organization, memberships safe for organization switching, effective permission keys, and a freshly derived CSRF token. It never returns password/session token details or causes CSRF digest persistence.
 
 Current-user session endpoints operate on the caller's global sessions. Tenant administrators end organization access through membership suspension; no tenant endpoint lists or revokes another user's global sessions. `POST /session/change-password` supports the forced first-login flow, rotates session/CSRF state, and follows the identity transaction contract.
 
@@ -153,11 +155,11 @@ Request detail includes attempts, routing explanation, normalized error metadata
 | Providers | `providers.read` | `providers.manage` | Test and rotate require their dedicated permissions |
 | Models | `models.read` | `models.manage` | Organization-scoped |
 | Routing | `routing.read` | `routing.manage` | Organization-scoped |
-| API keys | `api_keys.read_own` or `api_keys.read_all` | corresponding operation-specific `*_own` or `*_all` permission | Own scope enforces `owner_user_id = actor`; all scope is organization-wide |
+| API keys | `api_keys.read_own` or `api_keys.read_all` | corresponding operation-specific `*_own` or `*_all` permission | Own scope enforces `owner_membership_id = active membership`; all scope is organization-wide |
 | Budgets | `budgets.read` | `budgets.manage` | Organization-scoped |
 | Pricing | `pricing.read` | `pricing.manage` | Organization-scoped, versioned effective records |
-| Requests/usage | `usage.read_own` or `usage.read_all` | none | Own scope filters by keys owned by the actor; all scope is organization-wide |
-| Analytics | `analytics.read_own` or `analytics.read_all` | none | Same explicit scope as usage |
+| Requests/usage | `usage.read_own` or `usage.read_all` | none | Own scope filters immutable `requests.owner_membership_id = active membership`; a key transfer does not grant or remove access to historical requests; all scope is organization-wide |
+| Analytics | `analytics.read_own` or `analytics.read_all` | none | Own aggregates use the same admission-owner fact as usage; all scope is organization-wide |
 | Audit | `audit.read` | none | Owner/Admin only by default role matrix |
 | Sessions | authenticated user for own sessions | authenticated user for own revocation/password change | Tenant admins suspend membership instead of revoking global sessions |
 
@@ -175,12 +177,13 @@ Endpoint-specific additions:
 
 ## Handler and Service Sequence
 
-1. Middleware assigns request ID and applies security headers/size limits.
-2. Session middleware authenticates identity. It resolves and requires an active organization only for tenant endpoints; identity-only session, organization-selection, and forced-password endpoints proceed without one.
-3. Handler parses and schema-validates transport input.
-4. Application service requires atomic permission and applies resource policy.
-5. Service executes tenant transaction and domain invariants.
-6. Transport maps result/error to stable response.
+1. Middleware recovers panics safely, assigns the NexusRelay request ID, and applies trusted-proxy policy, security headers, size/content-type limits, and route-level timeouts.
+2. Session middleware authenticates identity and enforces CSRF where required. Authentication precedes detailed schema errors on protected endpoints.
+3. OpenAPI middleware validates parameters and bodies, then generated bindings decode transport input.
+4. Active organization is resolved and required only for tenant endpoints; identity-only session, organization-selection, and forced-password endpoints proceed without one.
+5. Strict handler maps generated transport input to a domain command.
+6. Application service requires atomic permission, applies resource policy, and executes tenant transactions and domain invariants.
+7. Transport maps the service result/error to a declared generated response type and stable error envelope.
 
 Handlers do not call SQL repositories directly. Permission checks are not inferred from HTTP method or UI route.
 
@@ -269,6 +272,7 @@ Filterable, cursor-paginated tables support narrow mobile presentation and detai
 - Resource lists use explicit revalidation after successful mutation, not stale optimistic assumptions for security state.
 - Charts may use client fetch with abortable requests and deferred filter input.
 - Generated control-plane API types are produced from the source contract; generated files are not manually edited.
+- CI lints and validates the source contract, regenerates Go and TypeScript artifacts with pinned tools, and fails on generated drift.
 
 ## Form Validation
 
@@ -320,6 +324,7 @@ CORS is unnecessary for same-origin browser traffic and remains deny-by-default.
 ## Verification
 
 - Contract tests for status codes, errors, pagination, filters, versions, and CSRF.
+- Contract lint, generation, compile/typecheck, and clean-regeneration checks.
 - Permission matrix tests for every endpoint, including cross-organization IDs.
 - One-time key response and no-store header tests.
 - UI integration tests for critical forms and stale version conflicts.

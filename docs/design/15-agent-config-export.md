@@ -26,7 +26,8 @@ AgentExportResult
   structured_preview where representable
   serialized_artifact
   schema/profile source and verified_at
-  merge guidance and collision warnings
+  supported run-scoped invocation metadata
+  placement guidance and collision warnings
 ```
 
 Exporter implementations are pure with respect to secrets and persistence. They receive no plaintext gateway key or provider credential. Registry lookup rejects unknown, disabled, or unverified exporters.
@@ -50,9 +51,9 @@ V1 ledger:
 
 | Agent | State | Release role |
 | --- | --- | --- |
-| OpenCode | profile_drafted | Must reach `contract_verified` before V1 release |
-| Kilo | not_researched | Framework target; not supported until verified |
-| CommandCode | not_researched | Framework target; not supported until verified |
+| OpenCode | contract_verified | V1 exporter; supported only through the verified run-scoped invocation |
+| Kilo | blocked | Schema shape found, but no authoritative fail-closed placement verified |
+| CommandCode | blocked | BYO-provider grammar and safe secret reference are not authoritatively documented |
 
 Names in this ledger do not claim support. Additional agents require only a profile and exporter implementation, not a gateway protocol change.
 
@@ -68,6 +69,9 @@ Names in this ledger do not claim support. Additional agents require only a prof
 - Output contains only the NexusRelay connection/provider entry and selected models.
 - Exporters must not set agent defaults, active provider lists, workflows, tools, permissions, MCP servers, or unrelated settings.
 - A provider/connection identifier collision produces explicit merge guidance; the exporter never silently overwrites an existing user configuration.
+- Support requires a fail-closed placement that keeps the base URL and environment-backed key reference authoritative together. Schema validity alone is insufficient.
+- If untrusted project configuration can override a trusted global entry and redirect its key reference, static global installation must not be support-claimed.
+- Run instructions are part of the versioned exporter contract and must be generated from the verified profile rather than generic merge guidance.
 
 ## API-Key Separation
 
@@ -105,13 +109,17 @@ Response:
   "exporter_id": "opencode",
   "exporter_version": "2026-07-26",
   "media_type": "application/json",
-  "filename": "opencode.json",
+  "filename": "nexusrelay-opencode.json",
   "base_url": "https://gateway.example.com/v1",
   "environment": {
     "variable": "NEXUSRELAY_API_KEY",
     "contains_secret": false
   },
   "config": {},
+  "invocation": {
+    "placement": "run_scoped_highest_user_merge",
+    "disable_project_config": true
+  },
   "merge_warnings": []
 }
 ```
@@ -122,7 +130,7 @@ Authorization requires key-read scope for the selected key: `api_keys.read_own` 
 
 ## OpenCode V1 Exporter
 
-Once the OpenCode profile reaches `contract_verified` against authoritative configuration/provider documentation and a repository-pinned schema snapshot, its V1 output is:
+With the OpenCode profile at `contract_verified` against authoritative configuration/provider documentation and repository-pinned schema provenance plus golden fixtures, its V1 output is:
 
 - Uses a configured provider ID and display name with safe defaults.
 - Uses `npm: "@ai-sdk/openai-compatible"`.
@@ -130,8 +138,12 @@ Once the OpenCode profile reaches `contract_verified` against authoritative conf
 - Renders the key as `{env:<AGENT_API_KEY_ENV>}`.
 - Emits selected models under the provider entry.
 - Does not emit `enabled_providers`, `model`, `small_model`, agents, tools, permissions, or MCP settings.
+- Is supplied through `OPENCODE_CONFIG_CONTENT`, the verified highest user/project-controlled merge, for each launched OpenCode process.
+- Is launched with `OPENCODE_DISABLE_PROJECT_CONFIG=1` so an untrusted repository cannot redirect the trusted key reference through project configuration.
 
-The repository-pinned profile records the schema source URL, retrieval date, and content hash. CI validates deterministically against that snapshot. A separate non-blocking drift job may compare the current upstream schema and open a review item; runtime generation never fetches a schema.
+OpenCode global or project-file installation is not support-claimed. The generated fragment authoritatively binds `npm`, `options.baseURL`, `options.apiKey`, and explicit selected models against lower user/project-controlled tiers. Provider-ID collisions still produce a warning. Organization-console and operating-system managed settings are later trusted administrative tiers; the smoke test inspects resolved configuration and fails if they alter the generated provider entry.
+
+The repository-pinned profile records `opencode-ai@1.18.5`, release commit and package hashes, schema source URL, retrieval date, retrieved schema hash, and deterministic golden fixtures under `docs/agents/fixtures/opencode/`. CI validates against those fixtures without network access. A separate non-blocking drift job may compare the current upstream schema and open a review item; runtime generation never fetches a schema.
 
 ## Agent-Specific Profile Gate
 
@@ -142,9 +154,10 @@ Before enabling Kilo, CommandCode, or another exporter:
 3. Verify environment-variable reference syntax without embedding plaintext.
 4. Verify model declaration and optional capability/limit fields.
 5. Document merge order, collision behavior, and settings that could disable unrelated providers.
-6. Pin schema or golden fixtures by version/hash and retrieval date.
-7. Add deterministic validation, secret-sentinel, model-intersection, and merge-safety tests.
-8. Reach `contract_verified`; optional smoke verification records agent version/date.
+6. Verify a highest-precedence run-scoped placement or equivalent fail-closed mechanism that prevents project configuration from redirecting the trusted key reference.
+7. Pin schema or golden fixtures by version/hash and retrieval date.
+8. Add deterministic validation, secret-sentinel, model-intersection, precedence-threat, and merge-safety tests.
+9. Reach `contract_verified`; optional smoke verification records agent version/date.
 
 If authoritative behavior is unavailable, the exporter remains blocked. NexusRelay does not infer one agent's schema from another or assume that an OpenAI-compatible runtime implies compatible configuration syntax.
 
@@ -168,6 +181,9 @@ If authoritative behavior is unavailable, the exporter remains blocked. NexusRel
 - Plaintext gateway keys never enter output, logs, audit events, traces, or persisted export records.
 - Two-organization tests prove key/model isolation and own/all permission scope.
 - Deterministic ordering, stable serialization, collision warnings, and omission of unknown metadata are tested.
+- Precedence-threat tests prove that supported placement cannot send the configured key reference to a project-controlled base URL.
+- Run instructions bind the generated artifact to the verified highest-precedence mechanism and disable unsafe project configuration where the profile requires it.
+- Resolved-configuration tests fail if a later organization or operating-system managed tier changes the generated provider package, base URL, key reference, or selected models.
 - OpenCode opt-in smoke test loads the rendered artifact, lists selected models, and performs a gateway request.
 - Agent profile sources and pinned artifacts are rechecked before releases that claim support.
 

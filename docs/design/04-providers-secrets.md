@@ -78,19 +78,35 @@ V1 uses application-level AES-256-GCM authenticated encryption through Go's stan
 
 Rotation procedure:
 
-1. Add a new unique key as active and retain prior keys as decrypt-only.
-2. Deploy/restart control-plane, all gateway replicas, and every worker that performs provider-secret jobs with the complete ring and the same active key ID before re-encryption begins.
-3. Worker claims credentials in bounded batches, decrypts with the recorded key, re-encrypts with the active key and fresh nonce, and updates only when the credential version/key ID still matches.
-4. Verify no credential rows reference an old key and perform a restore/decryption test.
-5. Remove an old key only after the verification and backup-retention window completes.
+1. Add a new unique key to every process ring as decrypt-capable while each ring's configured active key and `expected_epoch` remain equal to the current database key/epoch. All provider-secret readers must prove they contain the database-active key and all key IDs still referenced by envelopes.
+2. Roll sufficient processes to staged rings that contain both keys, configure the new active key ID, and set `expected_epoch` to the intended next epoch. During this staging interval, new-ring processes deliberately fail provider-cryptographic readiness/write checks while old-ring processes remain ready against the current database fence; ordinary non-provider duties may remain ready separately.
+3. After every required process has the complete ring and enough new-ring capacity is staged, an audited operator command locks the singleton global cryptographic state row and compare-and-swaps `(purpose=provider_master, active_key_id, epoch)` from the expected old values to the new key ID and `epoch + 1`. This atomically makes staged new-ring processes ready and fences remaining old-ring processes.
+4. Processes observe the new fence. Encrypting processes are ready for provider-secret writes only when both their configured active key ID and `expected_epoch` equal the database active key ID/epoch; stale processes fail readiness and reject create, rotate, test-envelope, or re-encryption writes. Readers reject affected provider work if their ring lacks any referenced envelope key.
+5. Worker claims credentials in bounded batches, decrypts with the recorded key, re-encrypts with the fenced active key and fresh nonce, and updates only when credential version/key ID and the active cryptographic epoch still match.
+6. Verify no live credential, test envelope, retained backup within policy, or lagging process requires the old key; perform database-restore/decryption and rollback-readiness tests.
+7. Remove the old key from rings only after the retention window and verification. Removing key material before references/backups age out is prohibited; changing the database fence back requires another audited epoch increment, never decrement or reuse.
 
 The application refuses startup for duplicate key IDs, invalid key lengths, no active key, multiple active keys, or unknown envelope versions. Database backups are useless for provider secrets without separately protected key-ring backups.
+
+PostgreSQL stores no key material, but it stores a singleton global fence:
+
+```text
+cryptographic_state
+  purpose               text primary key  -- provider_master
+  active_key_id         text not null
+  epoch                 bigint not null
+  updated_at            timestamptz not null
+  updated_by            uuid null
+```
+
+Initial deployment initializes this row from the validated ring under the bootstrap/migration operator procedure. Thereafter configuration never silently rewrites it at startup. Gateway, control plane, and provider-secret workers include the observed key ID/epoch in readiness state and refresh it with bounded staleness. A configured active-key or `expected_epoch` mismatch is not merely a warning: control plane/worker reject all new provider-secret encryption writes, and any process unable to decrypt database-referenced key IDs rejects the affected provider operation. Readiness is false until the local ring and database fence agree for that process's duties. Every encryption transaction rechecks the fence under lock or compare-and-swap so a rotation racing the transaction cannot commit ciphertext under a retired epoch.
 
 The V1 mounted key-ring is UTF-8 JSON with this exact shape:
 
 ```json
 {
   "version": 1,
+  "expected_epoch": 1,
   "active_key_id": "provider-2026-01",
   "keys": [
     {"key_id": "provider-2026-01", "key": "<base64-32-bytes>"}
@@ -98,7 +114,7 @@ The V1 mounted key-ring is UTF-8 JSON with this exact shape:
 }
 ```
 
-`version` must be `1`. `active_key_id` must name exactly one entry; all other entries are decrypt-only. `key_id` is a non-empty ASCII identifier matching `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`. `key` uses canonical padded base64 and must decode to exactly 32 bytes. Unknown fields, duplicate fields, duplicate key IDs, invalid UTF-8, and trailing JSON values are rejected. The generic secret-file newline and size rules are defined in `11-operations-security-testing.md`.
+`version` must be `1`. `expected_epoch` is an integer from `1` through the signed 64-bit maximum and records the exact database activation epoch for which the ring was deployed. `active_key_id` must name exactly one entry; all other entries are decrypt-only. `key_id` is a non-empty ASCII identifier matching `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`. `key` uses canonical padded base64 and must decode to exactly 32 bytes. Unknown fields, duplicate fields, duplicate key IDs, invalid UTF-8, and trailing JSON values are rejected. A ring copied from an earlier epoch remains stale even if a later audited rollback reuses its active key ID. The generic secret-file newline and size rules are defined in `11-operations-security-testing.md`.
 
 ## Secret Lifecycle
 
@@ -175,7 +191,12 @@ An override may narrow capabilities but must not claim adapter support that tran
 
 ## Shared OpenAI-Compatible Adapter
 
-The shared adapter supports configuration profiles for:
+The shared adapter is one parser/translator with a closed registry of versioned typed profiles. A connection selects a compiled profile ID; administrators cannot submit a profile definition. The registry has two profile classes:
+
+- The operator-configured `openai_compatible/v1` profile exposes only the bounded connection settings and dialect enums defined in its provider profile.
+- Named provider profiles such as `openrouter/v1` and `groq/v1` fix provider-owned base URL/authentication/operation behavior and may expose only reviewed typed settings documented in that provider profile.
+
+The shared implementation supports typed profile fields for:
 
 - Base URL and endpoint prefix.
 - Bearer or custom authentication header.
@@ -183,6 +204,10 @@ The shared adapter supports configuration profiles for:
 - Chat, Responses, Models, and Embeddings endpoint availability.
 - Usage and streaming dialect quirks that are verified and explicitly modeled.
 - Static configured model IDs when model listing is unavailable.
+
+Named profiles may register a bounded operation-specific request augmentation implemented in code. Each augmentation has a reviewed enum/version, fixed destination and shape, deterministic conflict behavior, and contract fixtures. It may derive values only from validated normalized request/capability state or a typed profile setting. It cannot accept arbitrary JSON, field paths, templates, scripts, client-supplied provider objects, or generic pass-through maps. The custom `openai_compatible/v1` profile has no request-augmentation option.
+
+The initial OpenRouter Chat augmentation is `openrouter_require_parameters_v1`: when a request uses any capability-gated field, the adapter adds the fixed upstream object member `provider.require_parameters: true`. Clients and administrators cannot set or override the `provider` object, and the profile does not forward other OpenRouter routing controls. Groq has no request augmentation until a verified profile revision defines one.
 
 Compatibility is not assumed from marketing claims. A provider profile must pass deterministic contract tests before being treated as supported.
 
@@ -289,18 +314,20 @@ Each supported provider requires:
 - Mock-server contract fixtures containing no real secrets or user content.
 - Optional live smoke-test instructions.
 
-Xiaomi MiMo and CommandCode remain blocked from implementation until these deliverables exist.
+Xiaomi MiMo and CommandCode remain blocked from implementation until these deliverables exist. Before V1 scope freeze, each blocked provider must follow the release disposition in design 14: verify an authoritative contract, receive an approved requirements/design redefinition, or be explicitly deferred/removed from the V1 baseline.
 
 ## Verification
 
 - Encryption/decryption, tamper detection, wrong-AAD, and key rotation tests.
+- Global cryptographic-state bootstrap/CAS, stale-process readiness, write-fence race, rollback epoch, restore, and safe-key-retirement tests.
 - Secret absence from API output, logs, audit, Redis, and error paths.
 - SSRF tests for redirects, DNS rebinding simulation, IPv4/IPv6 private ranges, encoded hosts, and path joining.
 - Header-smuggling/forbidden-header tests, immutable provider-type tests, and concurrent administrator-rotation/master-key-re-encryption tests.
 - Adapter cancellation, deadline, body-close, malformed response, streaming, and error normalization tests.
+- Shared-adapter profile tests proving unknown profile/augmentation versions fail closed, named augmentations emit only their fixed reviewed fields, client/admin input cannot override them, and the custom profile cannot pass arbitrary upstream fields.
 - Connection test abuse limits and redaction tests.
 - Capability narrowing and unsupported-feature rejection tests.
 
 ## Requirement Coverage
 
-This design satisfies FR-PROV-001 through FR-PROV-011, the provider adapter contract in Section 9, SEC-002, SEC-006 through SEC-008, SEC-015, SEC-019, and relevant provider release acceptance criteria.
+This design satisfies FR-PROV-001 through FR-PROV-012, the provider adapter contract in Section 9, SEC-002, SEC-006 through SEC-008, SEC-015, SEC-019, and relevant provider release acceptance criteria.

@@ -35,7 +35,7 @@ All pre-commit errors use `Content-Type: application/json`, the envelope in `05-
 | `invalid_request`, including malformed JSON/media type/body limit/unknown field | 400 | `invalid_request_error` | none |
 | `model_not_found`, `model_not_allowed` | 404 | `invalid_request_error` | none |
 | `unsupported_model_capability` | 400 | `invalid_request_error` | none |
-| `gateway_rate_limited` | 429 | `rate_limit_error` | `Retry-After` and bounded gateway rate-limit headers when known |
+| `gateway_rate_limited` | 429 | `rate_limit_error` | `Retry-After` and bounded gateway rate-limit headers for fixed UTC-minute capacity denials; no fabricated reset for a request larger than its configured TPM limit |
 | `budget_exceeded` | 429 | `rate_limit_error` | no fabricated reset time; budget period metadata is administrative only |
 | `provider_rate_limited` after fallback exhaustion | 429 | `rate_limit_error` | sanitized bounded `Retry-After` when trustworthy |
 | `provider_unavailable` | 503 | `server_error` | optional bounded `Retry-After` |
@@ -125,6 +125,7 @@ V1 supports a normalized subset rather than every OpenAI Responses feature.
 | `stream` | supported | SSE event normalization |
 | `max_output_tokens` | supported | Target limit applies |
 | `temperature`, `top_p` | capability-gated | No silent dropping |
+| `stop` | rejected | V1 defines stop sequences only for Chat Completions; no normalized Responses stop semantics are claimed |
 | `tools`, `tool_choice`, parallel calls | capability-gated | Function tools only in initial V1 |
 | Text format JSON schema | capability-gated | Same semantics as structured output |
 | Built-in web/file/computer/code tools | rejected | NexusRelay does not host tools in V1 |
@@ -177,8 +178,9 @@ response.completed
 - Capability-gated fields filter incompatible targets and require at least one remaining eligible target; they do not require every configured target to support the feature.
 - If the key cannot access a model, response does not disclose hidden provider/target details.
 - Provider adapters may reject stricter provider-specific bounds after route selection; those failures are normalized and are not silently retried when client input is invalid.
-- Exact official SDK versions used for compatibility are pinned in test documentation.
-- The baseline is not implementation-ready until test documentation names exact SDK language/version pairs and commits golden request, response, stream, and error fixtures.
+- Exact official SDK versions and integrity metadata are pinned in [`docs/testing/openai-sdk-compatibility.md`](../testing/openai-sdk-compatibility.md).
+- Representative expected request shapes and normative model, Chat, Responses, Embeddings, stream, cancellation, and pre/post-commit error fixtures are committed under `docs/testing/fixtures/openai-sdk/`. Expected request shapes are provisional until captured through the real gateway. Gateway implementation must build and pass the documented harness before claiming compatibility.
+- Compatibility evidence expands with the implemented endpoint set. Phase 6 expands the representative Phase 0 baseline for Models and Chat, including every reachable gateway code/HTTP pairing, malformed JSON/media type/body limit, disclosure-safe authentication/model denial, bounded retry headers, sanitized malformed/oversized upstream errors, and Chat post-commit failure. Phase 10 applies the same standard to Responses and Embeddings, including rejected Responses `stop` and Responses post-commit failure. Each pinned SDK runner asserts raw status, headers, and body/event data in addition to any language-specific exception observation.
 
 ## Change Policy
 
