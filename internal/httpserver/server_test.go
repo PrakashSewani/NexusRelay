@@ -16,7 +16,7 @@ func TestServerDoesNotMutateReadiness(t *testing.T) {
 		t.Fatal(err)
 	}
 	health := &Health{}
-	server := New(listener.Addr().String(), health.Handler(), time.Second)
+	server := New(listener.Addr().String(), health.Handler(nil), time.Second)
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() { result <- server.Serve(ctx, listener) }()

@@ -51,8 +51,8 @@ func TestEnvInventoryIsExactAndClassified(t *testing.T) {
 	if err := scanner.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if len(keys) != 107 {
-		t.Fatalf("inventory count = %d, want 107", len(keys))
+	if len(keys) != 113 {
+		t.Fatalf("inventory count = %d, want 113", len(keys))
 	}
 	if len(inventory) != len(keys) {
 		t.Fatalf("typed inventory count = %d, .env count = %d", len(inventory), len(keys))
@@ -311,6 +311,11 @@ func TestURLsTLSOriginsAndTunnelValidation(t *testing.T) {
 	if _, err := ParseDeployment(values); err == nil {
 		t.Fatal("HTTP Cloudflare URL accepted")
 	}
+	values = productionFixture(t)
+	values["ENABLE_CLOUDFLARE_TUNNEL"] = "true"
+	if _, err := ParseDeployment(values); err == nil {
+		t.Fatal("Cloudflare tunnel without an HTTPS Traefik origin accepted")
+	}
 	values = fixture(t)
 	values["PUBLIC_API_BASE_URL"] = "https://api.example.com/v1"
 	values["PUBLIC_API_HOST"] = "api.example.com"
@@ -318,6 +323,10 @@ func TestURLsTLSOriginsAndTunnelValidation(t *testing.T) {
 	values["ADMIN_HOST"] = "admin.example.com"
 	values["ADMIN_ORIGINS"] = "https://admin.example.com"
 	values["ENABLE_CLOUDFLARE_TUNNEL"] = "true"
+	values["TLS_MODE"] = "acme"
+	values["ACME_EMAIL"] = "operator@example.com"
+	values["ACME_DNS_PROVIDER"] = "cloudflare"
+	values["ACME_DNS_API_TOKEN_FILE"] = writeSecret(t, "acme", "token", 0o600)
 	values["CLOUDFLARE_TUNNEL_ID"] = "tunnel-1"
 	values["CLOUDFLARE_TUNNEL_CREDENTIALS_FILE"] = writeSecret(t, "cloudflare", `{"AccountTag":"account","TunnelSecret":"secret","TunnelID":"other"}`, 0o600)
 	if _, err := ParseDeployment(values); err == nil {
@@ -325,6 +334,10 @@ func TestURLsTLSOriginsAndTunnelValidation(t *testing.T) {
 	}
 	values = productionFixture(t)
 	values["ENABLE_CLOUDFLARE_TUNNEL"] = "true"
+	values["TLS_MODE"] = "acme"
+	values["ACME_EMAIL"] = "operator@example.com"
+	values["ACME_DNS_PROVIDER"] = "cloudflare"
+	values["ACME_DNS_API_TOKEN_FILE"] = writeSecret(t, "acme", "token", 0o600)
 	values["ADMIN_EXPOSURE_MODE"] = "private"
 	values["ADMIN_BASE_URL"] = "https://api.example.com"
 	values["ADMIN_HOST"] = "api.example.com"
@@ -340,6 +353,41 @@ func TestURLsTLSOriginsAndTunnelValidation(t *testing.T) {
 	values["ENABLE_TAILSCALE_PRIVATE_ADMIN"] = "true"
 	if _, err := ParseDeployment(values); err == nil || !strings.Contains(err.Error(), "ADR 0002") {
 		t.Fatalf("Tailscale error = %v", err)
+	}
+}
+
+func TestOTLPHTTPCollectorEndpointValidation(t *testing.T) {
+	for _, endpoint := range []string{
+		"grpc://collector:4317",
+		"https://user:password@collector.example/v1/traces",
+		"https://collector.example/v1/traces?token=secret",
+		"https://collector.example/v1/traces#fragment",
+	} {
+		values := fixture(t)
+		values["OTEL_ENABLED"] = "true"
+		values["OTEL_EXPORTER_OTLP_ENDPOINT"] = endpoint
+		if _, err := ParseGateway(values); err == nil {
+			t.Errorf("OTLP endpoint %q accepted", endpoint)
+		}
+	}
+	values := fixture(t)
+	values["OTEL_ENABLED"] = "true"
+	values["OTEL_EXPORTER_OTLP_ENDPOINT"] = "https://collector.example/v1/traces"
+	settings, err := ParseGateway(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Observability.OTLPEndpoint.String() != values["OTEL_EXPORTER_OTLP_ENDPOINT"] {
+		t.Fatalf("OTLP endpoint = %q", settings.Observability.OTLPEndpoint)
+	}
+	values = fixture(t)
+	values["OTEL_EXPORTER_OTLP_ENDPOINT"] = "http://127.0.0.1:4318/v1/traces"
+	settings, err = ParseGateway(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Observability.OTel {
+		t.Fatal("collector endpoint enabled tracing implicitly")
 	}
 }
 
@@ -508,6 +556,10 @@ func TestConditionalDeploymentSecretsUseProtectedFiles(t *testing.T) {
 	}
 	values = productionFixture(t)
 	values["ENABLE_CLOUDFLARE_TUNNEL"] = "true"
+	values["TLS_MODE"] = "acme"
+	values["ACME_EMAIL"] = "operator@example.com"
+	values["ACME_DNS_PROVIDER"] = "cloudflare"
+	values["ACME_DNS_API_TOKEN_FILE"] = writeSecret(t, "acme-token", "token", 0o600)
 	values["CLOUDFLARE_TUNNEL_ID"] = "tunnel-1"
 	values["CLOUDFLARE_TUNNEL_CREDENTIALS_FILE"] = writeSecret(t, "cloudflare", `{"AccountTag":"account","TunnelSecret":"secret","TunnelID":"tunnel-1"}`, 0o644)
 	if _, err := ParseDeployment(values); err == nil {
@@ -584,6 +636,41 @@ func TestUnknownApplicationSettingsRejectedAndHostEnvironmentIgnored(t *testing.
 	}
 }
 
+func TestDependencyReadinessRelationships(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		values map[string]string
+		want   string
+	}{
+		{
+			name: "probe timeout before startup timeout",
+			values: map[string]string{
+				"DEPENDENCY_STARTUP_TIMEOUT": "3s",
+				"DEPENDENCY_PROBE_TIMEOUT":   "3s",
+			},
+			want: "DEPENDENCY_PROBE_TIMEOUT",
+		},
+		{
+			name: "retry minimum before maximum",
+			values: map[string]string{
+				"DEPENDENCY_RETRY_MIN_DELAY": "3s",
+				"DEPENDENCY_RETRY_MAX_DELAY": "2s",
+			},
+			want: "DEPENDENCY_RETRY_MIN_DELAY",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			values := fixture(t)
+			for name, value := range test.values {
+				values[name] = value
+			}
+			if _, err := ParseGateway(values); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("ParseGateway() error = %v, want %s", err, test.want)
+			}
+		})
+	}
+}
+
 func TestProcessClassificationsMatchAcceptedViews(t *testing.T) {
 	values := map[string]string{}
 	for name := range inventory {
@@ -652,6 +739,22 @@ func TestProcessClassificationsMatchAcceptedViews(t *testing.T) {
 	}
 }
 
+func TestDeploymentRedisPasswordMatchesClientURL(t *testing.T) {
+	values := fixture(t)
+	if _, err := ParseDeployment(values); err != nil {
+		t.Fatalf("matching Redis credentials rejected: %v", err)
+	}
+	values["REDIS_PASSWORD_FILE"] = writeSecret(t, "other-redis-password", "different_redis_password_0123456789", 0o600)
+	if _, err := ParseDeployment(values); err == nil || !strings.Contains(err.Error(), "REDIS_PASSWORD_FILE") {
+		t.Fatalf("mismatched Redis credentials error = %v", err)
+	}
+	values = fixture(t)
+	values["REDIS_URL_FILE"] = writeSecret(t, "named-redis-user", "redis://other:redis_password_0123456789abcdefXYZ@redis:6379/0", 0o600)
+	if _, err := ParseDeployment(values); err == nil || !strings.Contains(err.Error(), "username") {
+		t.Fatalf("unsupported Redis username error = %v", err)
+	}
+}
+
 func TestReadSecretFileContract(t *testing.T) {
 	for _, test := range []struct {
 		value   string
@@ -679,7 +782,8 @@ func fixture(t *testing.T) map[string]string {
 		"DATABASE_GATEWAY_PASSWORD_FILE":       writeAt(t, dir, "gateway-db", "gateway-password", 0o600),
 		"DATABASE_CONTROL_PLANE_PASSWORD_FILE": writeAt(t, dir, "control-db", "control-password", 0o600),
 		"DATABASE_WORKER_PASSWORD_FILE":        writeAt(t, dir, "worker-db", "worker-password", 0o600),
-		"REDIS_URL_FILE":                       writeAt(t, dir, "redis", "redis://:password@redis:6379/0", 0o600),
+		"REDIS_URL_FILE":                       writeAt(t, dir, "redis", "redis://:redis_password_0123456789abcdefXYZ@redis:6379/0", 0o600),
+		"REDIS_PASSWORD_FILE":                  writeAt(t, dir, "redis-password", "redis_password_0123456789abcdefXYZ", 0o600),
 		"MASTER_KEYRING_FILE":                  writeAt(t, dir, "master", `{"version":1,"expected_epoch":1,"active_key_id":"provider-1","keys":[{"key_id":"provider-1","key":"`+key+`"}]}`, 0o600),
 		"API_KEY_PEPPER_RING_FILE":             writeAt(t, dir, "pepper", ringJSON("pepper-1", key), 0o600),
 		"SESSION_SECRET_FILE":                  writeAt(t, dir, "session", key, 0o600),

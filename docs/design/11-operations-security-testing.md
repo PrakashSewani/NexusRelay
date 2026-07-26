@@ -28,6 +28,12 @@ Optional Compose profiles may add `cloudflared`, `tailscale`, and `coredns`. V1 
 - Traefik ACME state uses a protected named volume when automated certificate management is enabled. Certificate resolver/provider selection is configuration-driven.
 - Application containers have no durable local state.
 - Secret files are mounted read-only.
+- The Phase 2 localhost path keeps host source secrets in an ignored mode-`0700`
+  directory with mode-`0600` files, validates the exact inventory, and uses a
+  networkless allowlisted publisher to copy only each service's required files
+  into separate named volumes as mode `0400` with the fixed service UID/GID.
+  Existing published volumes are immutable through this flow: changed, missing,
+  or extra files fail startup instead of rotating credentials implicitly.
 
 ### Networks
 
@@ -99,6 +105,7 @@ DATABASE_MAX_CONNECTIONS_*
 DATABASE_STATEMENT_TIMEOUT
 DATABASE_TRANSACTION_TIMEOUT
 REDIS_URL_FILE
+REDIS_PASSWORD_FILE
 MASTER_KEYRING_FILE
 API_KEY_PEPPER_RING_FILE
 SESSION_SECRET_FILE
@@ -152,6 +159,8 @@ PRIVATE_DNS_IP
 
 Startup validation checks URL schemes, timeout relationships, secret lengths/formats, origin policy, schema compatibility, and required files. Errors name the setting but never print secret values.
 
+Phase 2 dependency readiness uses typed startup timeout, probe timeout, probe interval, and retry-backoff settings. Gateway, control-plane, and worker first establish authenticated PostgreSQL and Redis connectivity during a bounded startup window, then probe continuously. Dependency loss marks readiness false without changing liveness; recovery restores readiness. Schema compatibility, provider cryptographic fence, Redis Function, and product initialization checks are added cumulatively by their owning phases.
+
 The PostgreSQL principal-name settings are transport/configuration inputs for official images, not operator-configurable role semantics. Validation requires exactly `POSTGRES_USER=nexusrelay_cluster_admin`, `DATABASE_MIGRATION_USER=nexusrelay_migration`, `DATABASE_GATEWAY_USER=nexusrelay_gateway`, `DATABASE_CONTROL_PLANE_USER=nexusrelay_control_plane`, and `DATABASE_WORKER_USER=nexusrelay_worker`. Core validation also requires `POSTGRES_DB == DATABASE_NAME`; a mismatch or renamed principal fails before initialization or process startup.
 
 Forced RLS is not runtime-configurable in production. Test tooling may use a separate privileged database role only for migration/setup assertions; application roles always operate with forced RLS.
@@ -163,6 +172,7 @@ All `*_FILE` values point to regular read-only files. Parsers remove at most one
 - `POSTGRES_PASSWORD_FILE`: UTF-8 password for `POSTGRES_USER=nexusrelay_cluster_admin` after one trailing newline is removed. Outside trusted PostgreSQL initialization, explicit audited role-graph provisioning, and reviewed recovery, it is not mounted into Atlas or an application container.
 - `DATABASE_MIGRATION_PASSWORD_FILE`, `DATABASE_GATEWAY_PASSWORD_FILE`, `DATABASE_CONTROL_PLANE_PASSWORD_FILE`, and `DATABASE_WORKER_PASSWORD_FILE`: UTF-8 passwords after one trailing newline is removed. Every setting names a distinct file and secret value. Trusted empty-volume PostgreSQL initialization is the sole process that receives all five database password files so it can create the fixed logins. Atlas and each runtime process receive only their own file. Secret-generation/init tooling validates distinct paths and values without logging, serializing, or comparing them in observable output.
 - `REDIS_URL_FILE`: one absolute `redis://` or `rediss://` URI with credentials percent-encoded as required; maximum 4 KiB.
+- `REDIS_PASSWORD_FILE`: dedicated Redis server bootstrap password containing at least 32 base64url characters. Its value must equal the percent-decoded password in `REDIS_URL_FILE`. Redis startup reads it from a protected file into a generated in-memory ACL/configuration; the value is not passed as a process argument or logged.
 - `MASTER_KEYRING_FILE`: versioned JSON key ring with `expected_epoch` defined in `04-providers-secrets.md`; maximum 64 KiB; file permissions must prevent group/world read.
 - `API_KEY_PEPPER_RING_FILE`: UTF-8 JSON with the exact V1 shape below; maximum 64 KiB. `version` must be `1`; `active_key_id` must name exactly one entry; entries not active are verify-only. `key_id` matches `[A-Za-z0-9][A-Za-z0-9._-]{0,63}` and each `key` is canonical padded base64 for exactly 32 decoded bytes. Invalid UTF-8, unknown/duplicate fields, trailing JSON values, and duplicate key IDs are rejected. Existing hashes retain their `pepper_key_id`; old peppers are removed only after no hashes reference them or all affected keys are intentionally revoked.
 
@@ -239,6 +249,7 @@ Trusted proxy count/CIDRs are explicit so source IP cannot be spoofed through fo
 - Tailscale DNS config uses CoreDNS as a restricted nameserver for the configured admin hostname/private suffix. Clients must accept Tailscale DNS settings.
 - DNS and HTTPS behavior are tested from an authorized tailnet client and from a non-tailnet public client.
 - If Docker Desktop cannot provide kernel TUN/subnet-routing support on the host version, deployment is blocked pending an approved alternative such as running Tailscale on the macOS host; the implementation must not silently publish the dashboard through Cloudflare instead.
+- The credential-free feasibility harness and authenticated acceptance procedure are maintained in `deploy/private-admin/test-feasibility.sh` and `docs/runbooks/tailscale-private-admin.md`. Passing the local harness alone does not accept ADR 0002 or permit profile enablement.
 
 ## PostgreSQL Operations
 
@@ -252,12 +263,15 @@ Trusted proxy count/CIDRs are explicit so source IP cannot be spoofed through fo
 - Long-running worker queries use separate pool limits from gateway.
 - Migrations run once through the pinned Atlas Community CLI container after directory validation and under Atlas's PostgreSQL advisory lock. `atlas.sum`, revision-history integrity, lock contention, and failure recovery are release-tested per ADR 0007. Atlas Cloud and Atlas Pro migration linting are not required.
 - Automated backups include regular full backups plus WAL/point-in-time strategy where operator infrastructure supports it.
-- Restore and exceptional role-graph upgrade runbooks verify application startup, RLS, encryption keys, outbox resumption, ownership, every exact `pg_auth_members` edge option, and the documented `pg_roles` attributes before Atlas or runtime startup.
+- The minimum reference full backup is a portable logical PostgreSQL artifact containing a custom-format database dump and password-free global role definitions. Backup/recovery may mount cluster-admin into a short-lived PostgreSQL client only; Atlas and long-running services never receive it. Exact role verification runs before Atlas in normal Compose startup and after restore.
+- Restore and exceptional role-graph upgrade runbooks verify ownership, every exact `pg_auth_members` edge option, and the documented `pg_roles` attributes before Atlas or runtime startup. The Phase 2 harness proves infrastructure recovery; application startup, RLS, encrypted credential readability, outbox resumption, and aggregate idempotency are added cumulatively by the phases that implement those capabilities.
+- PostgreSQL major upgrades remain blocked until the target NexusRelay release publishes a reviewed release-specific plan. Release evidence always covers the NexusRelay release/revision, Atlas version, PostgreSQL exact minor, and role-graph contract.
 
 ## Redis Operations
 
 - Use a pinned Redis 7.x release; ADR 0008 selects Redis Functions for the RPM/TPM state machine.
 - Use authentication and private networking.
+- The Phase 2 single-user Redis bootstrap uses `REDIS_PASSWORD_FILE` for the server and `REDIS_URL_FILE` for clients, with startup validation requiring matching values. Before Redis-backed product behavior exists, that shared identity is limited to authenticated `PING`; Phase 3 and later introduce process-specific least-privilege ACL identities together with the commands and key prefixes they require.
 - Configure memory policy so critical limiter/version keys are not unpredictably evicted; `noeviction` is preferred for correctness-sensitive deployments with capacity monitoring.
 - Key TTLs are mandatory for rate/reservation/activity structures where appropriate.
 - The worker loads versioned function libraries side by side, verifies committed source digests, and never replaces a mismatched active library. Gateways may call allowlisted functions but cannot load, replace, flush, delete, or execute arbitrary scripting code.
@@ -286,6 +300,8 @@ Forbidden fields include authorization, cookies, passwords, provider credentials
 
 Redaction occurs before serialization. Logging full Go structs representing HTTP requests/provider payloads is prohibited. Tests submit sentinel secrets/content and scan captured logs.
 
+Phase 2 Go services implement this boundary with the standard-library `log/slog`. Runtime event names and attributes are allowlisted centrally; unknown attributes, error objects, and forbidden secret/content categories are replaced before JSON or text serialization. A minimal redacting JSON logger is installed before typed configuration loads so startup failures do not fall back to unstructured standard-library logging. Traefik retains JSON application/access logs with all request headers dropped and no request-body logging.
+
 ## Metrics
 
 Prometheus endpoints are available only on the internal network or protected operational route. Core metrics include:
@@ -300,6 +316,8 @@ Prometheus endpoints are available only on the internal network or protected ope
 
 No user, key, request, organization, or arbitrary model IDs are labels.
 
+Each Phase 2 Go service serves `/metrics` on its existing internal operational listener when `METRICS_ENABLED=true`. Compose does not publish those listeners and Traefik does not route `/metrics`; operators that add a scraper attach it to the internal network or provide a separately protected operational route. The Phase 2 metric surface covers Go/process runtime state, service readiness, bounded PostgreSQL/Redis readiness probes, and operational HTTP outcomes/latency. Later phases add the subsystem metrics listed above as those behaviors are implemented.
+
 ## Tracing
 
 - OpenTelemetry support is optional and disabled unless configured.
@@ -308,6 +326,8 @@ No user, key, request, organization, or arbitrary model IDs are labels.
 - Span attributes use IDs and safe metadata under sampling/access controls; no model content or secrets.
 - Provider HTTP auto-instrumentation is configured not to capture bodies or authorization headers.
 - No mandatory external exporter exists; self-hosted collectors are supported.
+- Phase 2 supports traces-only OTLP/HTTP export. NexusRelay bundles no collector. Enabling requires one unauthenticated absolute `http` or `https` collector endpoint with no URL userinfo, query, or fragment; exporter headers are fixed empty and are not sourced from ambient OpenTelemetry header environment variables.
+- When tracing is enabled, the sampler is fixed to parent-based always-on. When disabled, no exporter or background trace pipeline is constructed and no telemetry connection is attempted.
 
 ## Security Controls
 
@@ -342,7 +362,7 @@ No user, key, request, organization, or arbitrary model IDs are labels.
 Runbooks must cover:
 
 1. Backing up PostgreSQL and verifying restore.
-2. Backing up master key ring and API-key pepper ring separately with stricter access.
+2. Backing up the provider master ring, API-key pepper ring, CSRF ring, and session secret separately from PostgreSQL with stricter, independent access.
 3. Restoring the database and matching key versions.
 4. Rotating provider encryption keys online in batches.
 5. Rotating API key pepper with verify-old/hash-new behavior; existing key hashes may require retained old peppers because plaintext is unavailable.
@@ -350,7 +370,9 @@ Runbooks must cover:
 
 Losing the provider master key means encrypted provider credentials cannot be recovered and must be re-entered. This is documented prominently.
 
-The core Compose profile must provide one reproducible minimum backup workflow: consistent PostgreSQL backup, separately protected cryptographic-ring backup, documented retention, and an automated restore exercise. Release documentation records measured recovery point and recovery time for the reference profile; optional operator WAL/PITR infrastructure may improve those values but is not the only documented recovery path.
+The core Compose profile must provide one reproducible minimum backup workflow: consistent portable logical PostgreSQL backup, separately protected cryptographic backup, documented retention, and an automated restore exercise. Database and cryptographic artifacts are independently checksum-protected and stored under separate protected roots. Database passwords are independent recovery inputs, not part of the role dump. Tooling never automatically deletes retained artifacts. Release documentation records measured recovery point and recovery time for the reference profile; optional operator WAL/PITR infrastructure may improve those values but is not the only documented recovery path.
+
+Exceptional role-graph upgrades use a release-owned request contract and reviewed mutation SQL bound by digest. The short-lived cluster-admin runner records exact before/after graphs and atomically publishes a protected external evidence bundle before Atlas is permitted to run. Phase 2 intentionally includes no real graph mutation SQL.
 
 ## Redis Loss Recovery
 

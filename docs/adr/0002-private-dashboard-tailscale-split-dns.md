@@ -45,3 +45,9 @@ Rejected because it publishes the private route address and does not meet the se
 - CoreDNS and route configuration become operational components that require health checks and tests.
 - The dashboard remains unavailable from ordinary public internet clients.
 - Generic application behavior does not depend on Tailscale, CoreDNS, or these hostnames when the profile is disabled.
+
+## Verification Record
+
+The credential-free macOS container feasibility harness is implemented in `deploy/private-admin/test-feasibility.sh` and documented in `docs/runbooks/tailscale-private-admin.md`. It verifies kernel-mode `tailscale0` creation with forwarding enabled and fixed-address, exact-host CoreDNS behavior using the pinned candidate images.
+
+This local evidence is necessary but not sufficient for acceptance. The ADR remains Proposed until one authenticated tailnet session verifies route approval, restricted DNS, administrator grants, authorized DNS/HTTPS access, unauthorized tailnet denial, public-client denial, and persistent-state restart behavior. No private-admin Compose services or enablement are shipped before that record is complete.

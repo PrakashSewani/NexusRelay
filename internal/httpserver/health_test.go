@@ -9,7 +9,7 @@ import (
 
 func TestHealthSemantics(t *testing.T) {
 	health := &Health{}
-	handler := health.Handler()
+	handler := health.Handler(nil)
 
 	assertHealth(t, handler, "/health/live", http.StatusOK, `"live"`)
 	assertHealth(t, handler, "/health/ready", http.StatusServiceUnavailable, `"not_ready"`)
@@ -17,6 +17,23 @@ func TestHealthSemantics(t *testing.T) {
 	assertHealth(t, handler, "/health/ready", http.StatusOK, `"ready"`)
 	health.SetReady(false)
 	assertHealth(t, handler, "/health/live", http.StatusOK, `"live"`)
+}
+
+func TestMetricsRouteIsOptional(t *testing.T) {
+	health := &Health{}
+	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	response := httptest.NewRecorder()
+	health.Handler(nil).ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("disabled metrics status = %d", response.Code)
+	}
+	metrics := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	request = httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	response = httptest.NewRecorder()
+	health.Handler(metrics).ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("metrics status = %d", response.Code)
+	}
 }
 
 func assertHealth(t *testing.T, handler http.Handler, path string, wantStatus int, wantBody string) {

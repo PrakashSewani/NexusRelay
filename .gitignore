@@ -9,6 +9,7 @@
 /secrets/
 /.secrets/
 /.local-secrets/
+/.cloudflare-secrets/
 *.local.secret
 
 # Go
@@ -32,6 +33,7 @@ dist/
 /app.tar
 /web.tar
 /migrate.tar
+/cloudflared.tar
 
 # Python
 __pycache__/

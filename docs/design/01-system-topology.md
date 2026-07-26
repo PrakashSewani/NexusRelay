@@ -103,6 +103,8 @@ Initialization establishes exact ownership and PostgreSQL 18 membership outcomes
 
 Initialization also revokes unsafe `PUBLIC` schema creation, grants the migration login the bounded database connection, temporary-object, and schema-bootstrap authority required by Atlas, and creates or transfers the application schema as needed for the first migration. Exact PostgreSQL 18 grant syntax is implementation-tested, but the resulting ownership and per-membership `admin_option`, `inherit_option`, and `set_option` values are mandatory. The role-level `INHERIT` attribute is only the default used when a role is later made a member; it does not override an explicit membership option. Migration and all foundational `NOLOGIN` roles use role-level `NOINHERIT` as a defensive default, while runtime LOGIN roles use `INHERIT`; effective access still follows the explicit edges above. No future arbitrary role creation is required for V1. A role-graph change is an exceptional deployment upgrade performed by an explicit audited cluster-admin provisioning command/runbook before Atlas, never by a normal migration.
 
+The fixed V1 schema layout uses private schema `nexusrelay` for application objects and private schema `nexusrelay_migration` for Atlas revision history. `nexusrelay_schema_owner` owns `nexusrelay`; `nexusrelay_migration` owns `nexusrelay_migration` and Atlas's revision table directly. `PUBLIC` receives no access to either private schema. Reviewed application migrations explicitly `SET ROLE nexusrelay_schema_owner` before creating application objects.
+
 ## Health Endpoints
 
 Each Go process exposes internal endpoints:

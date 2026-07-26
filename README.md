@@ -2,9 +2,21 @@
 
 NexusRelay is a self-hosted, multi-tenant LLM gateway designed to give applications one stable OpenAI-compatible API while centralizing provider access, model routing, policy enforcement, usage accounting, budgets, health, analytics, and audit history.
 
-> **Project status:** Phase 1 repository foundation is complete. The repository contains compileable Go service entrypoints, a strict Next.js shell, typed configuration, the versioned control-plane OpenAPI skeleton, pinned non-root images, migration tooling, and CI/security gates. The services currently expose operational scaffolding only, and the checked-in Compose fragment is non-runnable Phase 2 groundwork; PostgreSQL, Redis, Traefik, complete secret mounts, and functional product APIs are not implemented yet. Provider adapters and coding-agent exporters are enabled only after their external contracts are verified from authoritative sources.
+> **Project status:** Phase 1 repository foundation and the Phase 2 localhost core foundation are complete. The repository provides pinned Traefik, PostgreSQL, Redis, migration, web, gateway, control-plane, and worker services with protected secret publication, tested empty-volume database initialization, migrations, and continuous infrastructure readiness. The accepted optional Cloudflare Tunnel public API profile is available; private admin ingress and recovery work remains in Phase 2. Functional identity, administration, and inference APIs begin in later phases; owner bootstrap is unavailable until Phase 4. Provider adapters and coding-agent exporters are enabled only after their external contracts are verified from authoritative sources.
 
 Phase 1 accomplishments, preserved foundation decisions, verification evidence, and the Phase 2 boundary are recorded in [`docs/phases/phase-1/README.md`](docs/phases/phase-1/README.md).
+
+## Local Core
+
+Start the generic localhost deployment without optional ingress or provider credentials:
+
+```text
+make local-core-up
+```
+
+This creates ignored local configuration and development secrets when absent, validates them, starts the core with migrations, waits for health, and verifies `http://localhost:8080`. Stop it without deleting persistent volumes with `make local-core-down`. See [`docs/runbooks/phase-2-local-core.md`](docs/runbooks/phase-2-local-core.md) for the security model, status checks, reset behavior, and the explicit Phase 4 owner-bootstrap boundary.
+
+The optional locally managed Cloudflare Tunnel profile publishes only the configured public API hostname through HTTPS and retains the core-disabled default. See [`docs/runbooks/cloudflare-tunnel.md`](docs/runbooks/cloudflare-tunnel.md).
 
 ## Problem Statement
 

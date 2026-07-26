@@ -1,26 +1,27 @@
-# This file is a focused application-image/shared-configuration foundation.
-# It intentionally omits the Phase 2 PostgreSQL, Redis, Traefik, networking,
-# secrets, and complete runtime configuration required for a runnable core
-# deployment. With no profile selected, Compose starts no services. Enable only
-# the profile needed for image/configuration testing.
+# Phase 2 core localhost deployment. One-shot validation and publishers prepare
+# protected state before dependencies start; long-running services expose real
+# infrastructure readiness while later product/schema checks remain cumulative.
 
 x-build-args: &build-args
   VERSION: ${NEXUSRELAY_VERSION:-0.0.0-dev}
   REVISION: ${NEXUSRELAY_REVISION:-local}
   SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH:-0}
 
+x-security: &security
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
 x-go-application: &go-application
+  <<: *security
   image: nexusrelay-app:${NEXUSRELAY_IMAGE_TAG:-dev}
   build:
     context: ..
     dockerfile: deploy/docker/Dockerfile.go-app
     args: *build-args
   user: "65532:65532"
-  read_only: true
-  security_opt:
-    - no-new-privileges:true
-  cap_drop:
-    - ALL
   tmpfs:
     - /tmp:rw,noexec,nosuid,nodev,size=16m
   volumes:
@@ -28,18 +29,301 @@ x-go-application: &go-application
       source: shared-config
       target: /etc/nexusrelay/shared
       read_only: true
+  networks: [backend]
   depends_on:
+    secret-publish:
+      condition: service_completed_successfully
     shared-config-init:
       condition: service_completed_successfully
+    migrate:
+      condition: service_completed_successfully
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+  stop_signal: SIGTERM
+  stop_grace_period: 40s
+  cpus: 0.50
+  mem_limit: 256m
+  pids_limit: 128
 
 services:
-  # The project-scoped named volume starts root-owned, so this constrained
-  # one-shot publisher is the sole root process and sole writer. It publishes
-  # immutable releases/<revision> directories, then atomically replaces the
-  # current symlink. Application containers remain non-root and mount the volume
-  # read-only; their stable asset path is /etc/nexusrelay/shared/current.
+  proxy:
+    profiles: [core]
+    image: traefik:v3.5.0@sha256:4e7175cfe19be83c6b928cae49dde2f2788fb307189a4dc9550b67acf30c11a5
+    user: "65532:65532"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      PUBLIC_API_HOST: ${PUBLIC_API_HOST:-localhost}
+      ADMIN_HOST: ${ADMIN_HOST:-localhost}
+      TLS_MODE: ${TLS_MODE:-disabled}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+      ACME_DNS_PROVIDER: ${ACME_DNS_PROVIDER:-}
+      CF_DNS_API_TOKEN_FILE: /run/secrets/acme_dns_api_token
+    entrypoint: ["/usr/local/bin/nexusrelay-traefik-entrypoint"]
+    ports:
+      - "127.0.0.1:${HTTP_PORT:-8080}:8080"
+    volumes:
+      - type: bind
+        source: ./traefik/traefik.yaml
+        target: /etc/traefik/traefik.yaml
+        read_only: true
+      - type: volume
+        source: traefik-state
+        target: /var/lib/traefik
+      - type: bind
+        source: ./traefik/entrypoint.sh
+        target: /usr/local/bin/nexusrelay-traefik-entrypoint
+        read_only: true
+      - type: volume
+        source: traefik-cloudflare-secrets
+        target: /run/secrets
+        read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,uid=65532,gid=65532,mode=0700
+    networks: [edge, public-ingress]
+    healthcheck:
+      test: ["CMD", "traefik", "version"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      gateway:
+        condition: service_healthy
+      control-plane:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+      traefik-state-init:
+        condition: service_completed_successfully
+      cloudflare-secret-publish:
+        condition: service_completed_successfully
+        required: false
+    restart: unless-stopped
+    stop_grace_period: 20s
+    cpus: 0.50
+    mem_limit: 128m
+    pids_limit: 128
+
+  cloudflare-deployment-validate:
+    profiles: [cloudflare]
+    <<: *security
+    image: nexusrelay-app:${NEXUSRELAY_IMAGE_TAG:-dev}
+    build:
+      context: ..
+      dockerfile: deploy/docker/Dockerfile.go-app
+      args: *build-args
+    user: "0:0"
+    network_mode: none
+    command: ["/usr/local/bin/nexusrelay-validate-deployment", "--env-file", "/config/.env", "--secret-root", "/core-secrets", "--cloudflare-secret-root", "/cloudflare-secrets"]
+    volumes:
+      - type: bind
+        source: ../.env
+        target: /config/.env
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../.local-secrets
+        target: /core-secrets
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../.cloudflare-secrets
+        target: /cloudflare-secrets
+        read_only: true
+        bind:
+          create_host_path: false
+    restart: "no"
+    cpus: 0.25
+    mem_limit: 64m
+    pids_limit: 64
+
+  cloudflare-secret-publish:
+    profiles: [cloudflare]
+    image: busybox:1.37.0-uclibc@sha256:39e0df8c4d65953b55c344f017e1ff2e0031a7454b3c24e6b76d402f207e315a
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    command: ["/bin/sh", "/publish.sh"]
+    depends_on:
+      cloudflare-deployment-validate:
+        condition: service_completed_successfully
+    volumes:
+      - type: bind
+        source: ./cloudflare/publish-secrets.sh
+        target: /publish.sh
+        read_only: true
+      - type: bind
+        source: ../.cloudflare-secrets
+        target: /source
+        read_only: true
+        bind:
+          create_host_path: false
+      - cloudflared-secrets:/target/cloudflared
+      - traefik-cloudflare-secrets:/target/traefik
+    restart: "no"
+    cpus: 0.10
+    mem_limit: 32m
+    pids_limit: 32
+
+  cloudflare-config-init:
+    profiles: [cloudflare]
+    image: busybox:1.37.0-uclibc@sha256:39e0df8c4d65953b55c344f017e1ff2e0031a7454b3c24e6b76d402f207e315a
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    environment:
+      ENABLE_CLOUDFLARE_TUNNEL: ${ENABLE_CLOUDFLARE_TUNNEL:-false}
+      PUBLIC_API_HOST: ${PUBLIC_API_HOST:-localhost}
+      CLOUDFLARE_TUNNEL_ID: ${CLOUDFLARE_TUNNEL_ID:-}
+    command: ["/bin/sh", "/generate-config.sh", "/target/config.yml"]
+    depends_on:
+      cloudflare-deployment-validate:
+        condition: service_completed_successfully
+    volumes:
+      - type: bind
+        source: ./cloudflare/generate-config.sh
+        target: /generate-config.sh
+        read_only: true
+      - cloudflared-config:/target
+    restart: "no"
+    cpus: 0.10
+    mem_limit: 16m
+    pids_limit: 32
+
+  cloudflared:
+    profiles: [cloudflare]
+    image: cloudflare/cloudflared:2026.7.3@sha256:e39ee8da81ad5e05d77f38d2f51c60ca51bf2a8450ac3abab50c17fdb91d91bf
+    user: "65532:65532"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    command: ["tunnel", "--config", "/etc/cloudflared/config.yml", "run"]
+    volumes:
+      - cloudflared-config:/etc/cloudflared:ro
+      - cloudflared-secrets:/run/secrets:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,uid=65532,gid=65532,mode=0700
+    networks: [public-ingress]
+    healthcheck:
+      test: ["CMD", "cloudflared", "tunnel", "--config", "/etc/cloudflared/config.yml", "ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    depends_on:
+      cloudflare-config-init:
+        condition: service_completed_successfully
+      cloudflare-secret-publish:
+        condition: service_completed_successfully
+      proxy:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_signal: SIGTERM
+    stop_grace_period: 40s
+    cpus: 0.50
+    mem_limit: 128m
+    pids_limit: 128
+
+  deployment-validate:
+    profiles: [core, foundation, migration]
+    <<: *security
+    image: nexusrelay-app:${NEXUSRELAY_IMAGE_TAG:-dev}
+    build:
+      context: ..
+      dockerfile: deploy/docker/Dockerfile.go-app
+      args: *build-args
+    user: "0:0"
+    network_mode: none
+    command: ["/usr/local/bin/nexusrelay-validate-deployment", "--env-file", "/config/.env", "--secret-root", "/source", "--core-only"]
+    volumes:
+      - type: bind
+        source: ../.env
+        target: /config/.env
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../.local-secrets
+        target: /source
+        read_only: true
+        bind:
+          create_host_path: false
+    restart: "no"
+    cpus: 0.25
+    mem_limit: 64m
+    pids_limit: 64
+
+  secret-publish:
+    profiles: [core, foundation, migration]
+    image: busybox:1.37.0-uclibc@sha256:39e0df8c4d65953b55c344f017e1ff2e0031a7454b3c24e6b76d402f207e315a
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    command: ["/bin/sh", "/publish.sh"]
+    depends_on:
+      deployment-validate:
+        condition: service_completed_successfully
+    volumes:
+      - type: bind
+        source: ./secrets/publish.sh
+        target: /publish.sh
+        read_only: true
+      - type: bind
+        source: ../.local-secrets
+        target: /source
+        read_only: true
+        bind:
+          create_host_path: false
+      - postgres-secrets:/target/postgres
+      - migrate-secrets:/target/migrate
+      - redis-secrets:/target/redis
+      - gateway-secrets:/target/gateway
+      - control-plane-secrets:/target/control-plane
+      - worker-secrets:/target/worker
+    restart: "no"
+    cpus: 0.25
+    mem_limit: 64m
+    pids_limit: 64
+
+  traefik-state-init:
+    profiles: [core]
+    image: busybox:1.37.0-uclibc@sha256:39e0df8c4d65953b55c344f017e1ff2e0031a7454b3c24e6b76d402f207e315a
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    command: ["/bin/sh", "-ec", "chmod 0700 /state && chown 65532:65532 /state"]
+    volumes:
+      - traefik-state:/state
+    restart: "no"
+    cpus: 0.10
+    mem_limit: 16m
+    pids_limit: 32
+
   shared-config-init:
-    profiles: [foundation, bootstrap]
+    profiles: [core, foundation, bootstrap]
     image: busybox:1.37.0-uclibc@sha256:39e0df8c4d65953b55c344f017e1ff2e0031a7454b3c24e6b76d402f207e315a
     user: "0:0"
     network_mode: none
@@ -56,66 +340,38 @@ services:
       - |
         revision="$${RELEASE_REVISION}"
         case "$${revision}" in
-          ""|*[!A-Za-z0-9._-]*)
-            echo "NEXUSRELAY_REVISION must match [A-Za-z0-9][A-Za-z0-9._-]{0,127}" >&2
-            exit 1
-            ;;
+          ""|*[!A-Za-z0-9._-]*) echo "NEXUSRELAY_REVISION has invalid format" >&2; exit 1 ;;
           [A-Za-z0-9]*) ;;
-          *)
-            echo "NEXUSRELAY_REVISION must start with an ASCII letter or number" >&2
-            exit 1
-            ;;
+          *) echo "NEXUSRELAY_REVISION must start with an ASCII letter or number" >&2; exit 1 ;;
         esac
-        if [ "$${#revision}" -gt 128 ]; then
-          echo "NEXUSRELAY_REVISION must be at most 128 characters" >&2
-          exit 1
-        fi
-
+        [ "$${#revision}" -le 128 ] || { echo "NEXUSRELAY_REVISION is too long" >&2; exit 1; }
         mkdir -p /target/releases
         exec 9>/target/.publish.lock
         flock -x 9
-
-        candidate="$(mktemp -d "/target/releases/.$${revision}.XXXXXX")"
-        cleanup() {
-          if [ -n "$${candidate}" ] && [ -d "$${candidate}" ]; then
-            chmod -R u+w "$${candidate}"
-            rm -rf "$${candidate}"
-          fi
-        }
-        trap cleanup EXIT
-
-        # Explicit allowlist: hidden or unrelated files under deploy/shared are
-        # never mounted into this publisher and therefore cannot be copied.
+        candidate="$$(mktemp -d "/target/releases/.$${revision}.XXXXXX")"
+        trap 'rm -rf "$${candidate}"' EXIT
         cp /source/README.md "$${candidate}/README.md"
         chmod 0444 "$${candidate}/README.md"
-        digest="$(sha256sum "$${candidate}/README.md" | cut -d ' ' -f 1)"
+        digest="$$(sha256sum "$${candidate}/README.md" | cut -d ' ' -f 1)"
         printf '%s  README.md\n' "$${digest}" >"$${candidate}/MANIFEST.sha256"
         chmod 0444 "$${candidate}/MANIFEST.sha256"
-        chmod 0555 "$${candidate}"
-
         release="/target/releases/$${revision}"
         if [ -e "$${release}" ] || [ -L "$${release}" ]; then
-          if [ ! -d "$${release}" ] || [ -L "$${release}" ]; then
-            echo "existing release $${revision} is not an immutable directory" >&2
-            exit 1
-          fi
-          if [ "$(find "$${release}" -mindepth 1 -maxdepth 1 | wc -l)" -ne 2 ] ||
+          if [ ! -d "$${release}" ] || [ -L "$${release}" ] ||
+             [ "$$(find "$${release}" -mindepth 1 -maxdepth 1 | wc -l)" -ne 2 ] ||
              [ ! -f "$${release}/README.md" ] || [ -L "$${release}/README.md" ] ||
              [ ! -f "$${release}/MANIFEST.sha256" ] || [ -L "$${release}/MANIFEST.sha256" ] ||
              ! cmp -s "$${candidate}/README.md" "$${release}/README.md" ||
              ! cmp -s "$${candidate}/MANIFEST.sha256" "$${release}/MANIFEST.sha256"; then
-            echo "existing release $${revision} differs from the allowlisted payload" >&2
+            echo "existing release differs from the allowlisted payload" >&2
             exit 1
           fi
         else
-          chmod 0755 "$${candidate}"
+          chmod 0555 "$${candidate}"
           mv "$${candidate}" "$${release}"
-          chmod 0555 "$${release}"
           candidate=""
         fi
-
         next_link="/target/.current.$$$$"
-        rm -f "$${next_link}"
         ln -s "releases/$${revision}" "$${next_link}"
         mv -Tf "$${next_link}" /target/current
     volumes:
@@ -127,33 +383,308 @@ services:
         source: shared-config
         target: /target
     restart: "no"
+    cpus: 0.10
+    mem_limit: 32m
+    pids_limit: 32
+
+  postgres:
+    profiles: [core, foundation, migration]
+    image: postgres:18.4-bookworm@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-nexusrelay}
+      POSTGRES_USER: ${POSTGRES_USER:-nexusrelay_cluster_admin}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_cluster_admin_password
+      DATABASE_NAME: ${DATABASE_NAME:-nexusrelay}
+      DATABASE_MIGRATION_USER: ${DATABASE_MIGRATION_USER:-nexusrelay_migration}
+      DATABASE_MIGRATION_PASSWORD_FILE: /run/secrets/postgres_migration_password
+      DATABASE_GATEWAY_USER: ${DATABASE_GATEWAY_USER:-nexusrelay_gateway}
+      DATABASE_GATEWAY_PASSWORD_FILE: /run/secrets/postgres_gateway_password
+      DATABASE_CONTROL_PLANE_USER: ${DATABASE_CONTROL_PLANE_USER:-nexusrelay_control_plane}
+      DATABASE_CONTROL_PLANE_PASSWORD_FILE: /run/secrets/postgres_control_plane_password
+      DATABASE_WORKER_USER: ${DATABASE_WORKER_USER:-nexusrelay_worker}
+      DATABASE_WORKER_PASSWORD_FILE: /run/secrets/postgres_worker_password
+    volumes:
+      - type: volume
+        source: postgres-data
+        target: /var/lib/postgresql
+      - type: bind
+        source: ./postgres/init/10-nexusrelay-roles.sh
+        target: /docker-entrypoint-initdb.d/10-nexusrelay-roles.sh
+        read_only: true
+      - postgres-secrets:/run/secrets:ro
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "test -f \"$$PGDATA/.nexusrelay-initialized\" && pg_isready -q -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+    depends_on:
+      secret-publish:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    stop_grace_period: 60s
+    cpus: 1.00
+    mem_limit: 512m
+    pids_limit: 256
+
+  redis:
+    profiles: [core, foundation]
+    image: redis:7.4.5-bookworm@sha256:90e7a336d044f1abc9e9dbc05d65566850896d11453bbd1dd0fb7e5059f0e8fb
+    user: "999:999"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
+    entrypoint: ["/usr/local/bin/nexusrelay-redis-entrypoint"]
+    volumes:
+      - type: bind
+        source: ./redis/entrypoint.sh
+        target: /usr/local/bin/nexusrelay-redis-entrypoint
+        read_only: true
+      - redis-secrets:/run/secrets:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,uid=999,gid=999,mode=0700
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$$(tr -d '\\r\\n' </run/secrets/redis_password) redis-cli --no-auth-warning ping | grep -qx PONG"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    depends_on:
+      secret-publish:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    stop_grace_period: 20s
+    cpus: 0.50
+    mem_limit: 256m
+    pids_limit: 128
+
+  migrate:
+    profiles: [core, foundation, migration]
+    image: nexusrelay-migrate:${NEXUSRELAY_IMAGE_TAG:-dev}
+    build:
+      context: ..
+      dockerfile: deploy/migrate/Dockerfile
+      args:
+        VERSION: ${NEXUSRELAY_VERSION:-0.0.0-dev}
+        REVISION: ${NEXUSRELAY_REVISION:-local}
+    user: "65532:65532"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      DATABASE_HOST: postgres
+      DATABASE_PORT: ${DATABASE_PORT:-5432}
+      DATABASE_NAME: ${DATABASE_NAME:-nexusrelay}
+      DATABASE_MIGRATION_USER: ${DATABASE_MIGRATION_USER:-nexusrelay_migration}
+      DATABASE_MIGRATION_PASSWORD_FILE: /run/secrets/postgres_migration_password
+      DATABASE_SSLMODE: ${DATABASE_SSLMODE:-disable}
+    volumes:
+      - migrate-secrets:/run/secrets:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    networks: [backend]
+    depends_on:
+      secret-publish:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      postgres-role-verify:
+        condition: service_completed_successfully
+    restart: "no"
+    cpus: 0.50
+    mem_limit: 128m
+    pids_limit: 128
+
+  postgres-role-verify:
+    profiles: [core, foundation, migration]
+    image: postgres:18.4-bookworm@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296
+    user: "999:999"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      DATABASE_HOST: postgres
+      DATABASE_PORT: ${DATABASE_PORT:-5432}
+      DATABASE_NAME: ${DATABASE_NAME:-nexusrelay}
+      DATABASE_VERIFY_USER: ${DATABASE_MIGRATION_USER:-nexusrelay_migration}
+      DATABASE_VERIFY_PASSWORD_FILE: /run/secrets/postgres_migration_password
+      ROLE_GRAPH_SQL: /opt/nexusrelay/verify-role-graph.sql
+    entrypoint: ["/opt/nexusrelay/verify-role-graph.sh"]
+    volumes:
+      - type: bind
+        source: ./postgres/verify-role-graph.sh
+        target: /opt/nexusrelay/verify-role-graph.sh
+        read_only: true
+      - type: bind
+        source: ./postgres/verify-role-graph.sql
+        target: /opt/nexusrelay/verify-role-graph.sql
+        read_only: true
+      - migrate-secrets:/run/secrets:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    networks: [backend]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    cpus: 0.25
+    mem_limit: 64m
+    pids_limit: 64
 
   gateway:
     <<: *go-application
-    profiles: [foundation]
+    profiles: [core, foundation]
     command: ["/usr/local/bin/nexusrelay-gateway"]
+    environment:
+      NEXUSRELAY_ENV: ${NEXUSRELAY_ENV:-development}
+      NEXUSRELAY_VERSION: ${NEXUSRELAY_VERSION:-dev}
+      PUBLIC_API_BASE_URL: ${PUBLIC_API_BASE_URL:-http://localhost:8080/v1}
+      TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
+      HTTP_BIND_ADDRESS: ${HTTP_BIND_ADDRESS:-0.0.0.0}
+      HTTP_PORT: 8080
+      DATABASE_HOST: postgres
+      DATABASE_PORT: ${DATABASE_PORT:-5432}
+      DATABASE_NAME: ${DATABASE_NAME:-nexusrelay}
+      DATABASE_GATEWAY_USER: ${DATABASE_GATEWAY_USER:-nexusrelay_gateway}
+      DATABASE_GATEWAY_PASSWORD_FILE: /run/secrets/postgres_gateway_password
+      DATABASE_SSLMODE: ${DATABASE_SSLMODE:-disable}
+      DATABASE_MIN_CONNECTIONS_GATEWAY: ${DATABASE_MIN_CONNECTIONS_GATEWAY:-2}
+      DATABASE_MAX_CONNECTIONS_GATEWAY: ${DATABASE_MAX_CONNECTIONS_GATEWAY:-30}
+      DATABASE_STATEMENT_TIMEOUT: ${DATABASE_STATEMENT_TIMEOUT:-30s}
+      DATABASE_TRANSACTION_TIMEOUT: ${DATABASE_TRANSACTION_TIMEOUT:-30s}
+      REDIS_URL_FILE: /run/secrets/redis_url
+      REDIS_MAX_CONNECTIONS_GATEWAY: ${REDIS_MAX_CONNECTIONS_GATEWAY:-50}
+      DEPENDENCY_STARTUP_TIMEOUT: ${DEPENDENCY_STARTUP_TIMEOUT:-60s}
+      DEPENDENCY_PROBE_TIMEOUT: ${DEPENDENCY_PROBE_TIMEOUT:-3s}
+      DEPENDENCY_PROBE_INTERVAL: ${DEPENDENCY_PROBE_INTERVAL:-5s}
+      DEPENDENCY_RETRY_MIN_DELAY: ${DEPENDENCY_RETRY_MIN_DELAY:-100ms}
+      DEPENDENCY_RETRY_MAX_DELAY: ${DEPENDENCY_RETRY_MAX_DELAY:-2s}
+      MASTER_KEYRING_FILE: /run/secrets/provider_master_keyring
+      API_KEY_PEPPER_RING_FILE: /run/secrets/api_key_pepper_ring
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      METRICS_ENABLED: ${METRICS_ENABLED:-true}
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      SHUTDOWN_GRACE_PERIOD: ${SHUTDOWN_GRACE_PERIOD:-30s}
+    volumes:
+      - shared-config:/etc/nexusrelay/shared:ro
+      - gateway-secrets:/run/secrets:ro
+    networks: [edge, backend, egress]
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/nexusrelay-health-probe", "-url", "http://127.0.0.1:8080/health/ready", "-timeout", "3s"]
+      interval: 5s
+      timeout: 4s
+      retries: 3
+      start_period: 60s
 
   control-plane:
     <<: *go-application
-    profiles: [foundation]
+    profiles: [core, foundation]
     command: ["/usr/local/bin/nexusrelay-control-plane"]
+    environment:
+      NEXUSRELAY_ENV: ${NEXUSRELAY_ENV:-development}
+      NEXUSRELAY_VERSION: ${NEXUSRELAY_VERSION:-dev}
+      PUBLIC_API_BASE_URL: ${PUBLIC_API_BASE_URL:-http://localhost:8080/v1}
+      ADMIN_BASE_URL: ${ADMIN_BASE_URL:-http://localhost:8080}
+      ADMIN_ORIGINS: ${ADMIN_ORIGINS:-http://localhost:8080}
+      TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
+      HTTP_BIND_ADDRESS: ${HTTP_BIND_ADDRESS:-0.0.0.0}
+      HTTP_PORT: 8080
+      DATABASE_HOST: postgres
+      DATABASE_PORT: ${DATABASE_PORT:-5432}
+      DATABASE_NAME: ${DATABASE_NAME:-nexusrelay}
+      DATABASE_CONTROL_PLANE_USER: ${DATABASE_CONTROL_PLANE_USER:-nexusrelay_control_plane}
+      DATABASE_CONTROL_PLANE_PASSWORD_FILE: /run/secrets/postgres_control_plane_password
+      DATABASE_SSLMODE: ${DATABASE_SSLMODE:-disable}
+      DATABASE_MIN_CONNECTIONS_CONTROL_PLANE: ${DATABASE_MIN_CONNECTIONS_CONTROL_PLANE:-2}
+      DATABASE_MAX_CONNECTIONS_CONTROL_PLANE: ${DATABASE_MAX_CONNECTIONS_CONTROL_PLANE:-20}
+      DATABASE_STATEMENT_TIMEOUT: ${DATABASE_STATEMENT_TIMEOUT:-30s}
+      DATABASE_TRANSACTION_TIMEOUT: ${DATABASE_TRANSACTION_TIMEOUT:-30s}
+      REDIS_URL_FILE: /run/secrets/redis_url
+      REDIS_MAX_CONNECTIONS_CONTROL_PLANE: ${REDIS_MAX_CONNECTIONS_CONTROL_PLANE:-20}
+      DEPENDENCY_STARTUP_TIMEOUT: ${DEPENDENCY_STARTUP_TIMEOUT:-60s}
+      DEPENDENCY_PROBE_TIMEOUT: ${DEPENDENCY_PROBE_TIMEOUT:-3s}
+      DEPENDENCY_PROBE_INTERVAL: ${DEPENDENCY_PROBE_INTERVAL:-5s}
+      DEPENDENCY_RETRY_MIN_DELAY: ${DEPENDENCY_RETRY_MIN_DELAY:-100ms}
+      DEPENDENCY_RETRY_MAX_DELAY: ${DEPENDENCY_RETRY_MAX_DELAY:-2s}
+      MASTER_KEYRING_FILE: /run/secrets/provider_master_keyring
+      API_KEY_PEPPER_RING_FILE: /run/secrets/api_key_pepper_ring
+      SESSION_SECRET_FILE: /run/secrets/session_secret
+      CSRF_SECRET_RING_FILE: /run/secrets/csrf_secret_ring
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      METRICS_ENABLED: ${METRICS_ENABLED:-true}
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      SHUTDOWN_GRACE_PERIOD: ${SHUTDOWN_GRACE_PERIOD:-30s}
+    volumes:
+      - shared-config:/etc/nexusrelay/shared:ro
+      - control-plane-secrets:/run/secrets:ro
+    networks: [edge, backend]
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/nexusrelay-health-probe", "-url", "http://127.0.0.1:8080/health/ready", "-timeout", "3s"]
+      interval: 5s
+      timeout: 4s
+      retries: 3
+      start_period: 60s
 
   worker:
     <<: *go-application
-    profiles: [foundation]
+    profiles: [core, foundation]
     command: ["/usr/local/bin/nexusrelay-worker"]
+    environment:
+      NEXUSRELAY_ENV: ${NEXUSRELAY_ENV:-development}
+      NEXUSRELAY_VERSION: ${NEXUSRELAY_VERSION:-dev}
+      HTTP_BIND_ADDRESS: ${HTTP_BIND_ADDRESS:-0.0.0.0}
+      HTTP_PORT: 8080
+      DATABASE_HOST: postgres
+      DATABASE_PORT: ${DATABASE_PORT:-5432}
+      DATABASE_NAME: ${DATABASE_NAME:-nexusrelay}
+      DATABASE_WORKER_USER: ${DATABASE_WORKER_USER:-nexusrelay_worker}
+      DATABASE_WORKER_PASSWORD_FILE: /run/secrets/postgres_worker_password
+      DATABASE_SSLMODE: ${DATABASE_SSLMODE:-disable}
+      DATABASE_MIN_CONNECTIONS_WORKER: ${DATABASE_MIN_CONNECTIONS_WORKER:-2}
+      DATABASE_MAX_CONNECTIONS_WORKER: ${DATABASE_MAX_CONNECTIONS_WORKER:-10}
+      DATABASE_STATEMENT_TIMEOUT: ${DATABASE_STATEMENT_TIMEOUT:-30s}
+      DATABASE_TRANSACTION_TIMEOUT: ${DATABASE_TRANSACTION_TIMEOUT:-30s}
+      REDIS_URL_FILE: /run/secrets/redis_url
+      REDIS_MAX_CONNECTIONS_WORKER: ${REDIS_MAX_CONNECTIONS_WORKER:-20}
+      DEPENDENCY_STARTUP_TIMEOUT: ${DEPENDENCY_STARTUP_TIMEOUT:-60s}
+      DEPENDENCY_PROBE_TIMEOUT: ${DEPENDENCY_PROBE_TIMEOUT:-3s}
+      DEPENDENCY_PROBE_INTERVAL: ${DEPENDENCY_PROBE_INTERVAL:-5s}
+      DEPENDENCY_RETRY_MIN_DELAY: ${DEPENDENCY_RETRY_MIN_DELAY:-100ms}
+      DEPENDENCY_RETRY_MAX_DELAY: ${DEPENDENCY_RETRY_MAX_DELAY:-2s}
+      MASTER_KEYRING_FILE: /run/secrets/provider_master_keyring
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      METRICS_ENABLED: ${METRICS_ENABLED:-true}
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      SHUTDOWN_GRACE_PERIOD: ${SHUTDOWN_GRACE_PERIOD:-30s}
+    volumes:
+      - shared-config:/etc/nexusrelay/shared:ro
+      - worker-secrets:/run/secrets:ro
+    networks: [backend, egress]
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/nexusrelay-health-probe", "-url", "http://127.0.0.1:8080/health/ready", "-timeout", "3s"]
+      interval: 5s
+      timeout: 4s
+      retries: 3
+      start_period: 60s
 
-  # Phase 4 owner bootstrap is not implemented. This opt-in service can only
-  # display the current scaffold help and never starts with another profile.
-  bootstrap:
-    <<: *go-application
-    profiles: [bootstrap]
-    command: ["/usr/local/bin/nexusrelay-bootstrap", "--help"]
-
-  # Web remains a separate image and is opt-in because its complete runtime
-  # topology is outside this foundation.
   web:
-    profiles: [web]
+    profiles: [core, web]
     image: nexusrelay-web:${NEXUSRELAY_IMAGE_TAG:-dev}
     build:
       context: ..
@@ -167,18 +698,45 @@ services:
       - ALL
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=16m
+    networks: [edge]
+    healthcheck:
+      test: ["CMD", "/nodejs/bin/node", "/app/healthcheck.js"]
+      interval: 5s
+      timeout: 4s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    stop_signal: SIGTERM
+    stop_grace_period: 20s
+    cpus: 0.75
+    mem_limit: 512m
+    pids_limit: 256
 
-  # Migrations keep their independently pinned Atlas image. PostgreSQL and its
-  # required migration secret/configuration are intentionally not defined here.
-  migrate:
-    profiles: [migration]
-    image: nexusrelay-migrate:${NEXUSRELAY_IMAGE_TAG:-dev}
-    build:
-      context: ..
-      dockerfile: deploy/migrate/Dockerfile
-      args:
-        VERSION: ${NEXUSRELAY_VERSION:-0.0.0-dev}
-        REVISION: ${NEXUSRELAY_REVISION:-local}
+  bootstrap:
+    <<: *go-application
+    profiles: [bootstrap]
+    command: ["/usr/local/bin/nexusrelay-bootstrap", "--help"]
+    depends_on:
+      shared-config-init:
+        condition: service_completed_successfully
+
+networks:
+  public-ingress:
+  edge:
+  backend:
+    internal: true
+  egress:
 
 volumes:
+  postgres-data:
+  traefik-state:
   shared-config:
+  postgres-secrets:
+  migrate-secrets:
+  redis-secrets:
+  gateway-secrets:
+  control-plane-secrets:
+  worker-secrets:
+  cloudflared-config:
+  cloudflared-secrets:
+  traefik-cloudflare-secrets:

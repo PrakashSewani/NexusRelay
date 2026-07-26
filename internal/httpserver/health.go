@@ -20,10 +20,13 @@ func (h *Health) Ready() bool {
 	return h.ready.Load()
 }
 
-func (h *Health) Handler() http.Handler {
+func (h *Health) Handler(metrics http.Handler) http.Handler {
 	router := chi.NewRouter()
 	router.Get("/health/live", h.live)
 	router.Get("/health/ready", h.readiness)
+	if metrics != nil {
+		router.Handle("/metrics", metrics)
+	}
 	return router
 }
 

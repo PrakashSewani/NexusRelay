@@ -1,16 +1,18 @@
 SHELL := /bin/sh
 
 .DEFAULT_GOAL := help
-.NOTPARALLEL: fmt-check sdk-replay test lint build generate verify atlas-test
+.NOTPARALLEL: fmt-check sdk-replay test lint build generate verify atlas-test postgres-init-test backup-restore-test redis-startup-test traefik-config-test cloudflare-config-test private-admin-feasibility-test secret-publication-test local-core-test observability-test
 
 .PHONY: help fmt fmt-check go-fmt sdk-go-fmt go-fmt-check sdk-go-fmt-check \
-	go-test go-race go-vet go-build \
+	go-test go-race go-vet go-build observability-test \
 	web-install web-lint web-typecheck web-test web-build \
 	api-install api-validate api-generate api-drift api-test \
 	fixtures-validate shell-syntax-check python-syntax-check javascript-syntax-check whitespace-check \
 	sdk-replay-js sdk-replay-go sdk-replay-python sdk-replay \
 	atlas-hash atlas-validate atlas-validate-semantic atlas-test \
-	image-build-go image-build-web image-build-migrate \
+	compose-config postgres-init-test backup-verify backup-restore-test redis-startup-test traefik-config-test cloudflare-config-test private-admin-feasibility-test \
+	secret-publication-test local-core-init local-core-up local-core-check local-core-down local-core-test \
+	image-build-go image-build-web image-build-migrate image-pull-cloudflared \
 	test lint build generate verify
 
 help:
@@ -19,13 +21,15 @@ help:
 		'  fmt             Autoformat root-module and SDK replay Go files with gofmt.' \
 		'  fmt-check       Check Go formatting, authored syntax/validation, fixture canonical form, and whitespace.' \
 		'' \
-		'Go: go-fmt sdk-go-fmt go-fmt-check sdk-go-fmt-check go-test go-race go-vet go-build' \
+		'Go: go-fmt sdk-go-fmt go-fmt-check sdk-go-fmt-check go-test go-race go-vet go-build observability-test' \
 		'Web: web-install web-lint web-typecheck web-test web-build' \
 		'API: api-install api-validate api-generate api-drift api-test' \
 		'SDK replay: sdk-replay-js sdk-replay-go sdk-replay-python sdk-replay' \
 		'Fixtures: fixtures-validate' \
 		'Atlas: atlas-hash atlas-validate atlas-validate-semantic atlas-test' \
-		'Images: image-build-go image-build-web image-build-migrate' \
+		'Deployment: compose-config postgres-init-test backup-verify backup-restore-test redis-startup-test traefik-config-test cloudflare-config-test private-admin-feasibility-test secret-publication-test' \
+		'Local core: local-core-init local-core-up local-core-check local-core-down local-core-test' \
+		'Images: image-build-go image-build-web image-build-migrate image-pull-cloudflared' \
 		'Aggregates: test lint build generate verify' \
 		'' \
 		'All image builds require VERSION, REVISION, and IMAGE_TAG.' \
@@ -62,7 +66,7 @@ sdk-go-fmt-check:
 	scripts/gofmt.sh check sdk
 
 shell-syntax-check:
-	sh -n deploy/migrate/atlas.sh deploy/migrate/entrypoint.sh deploy/migrate/test-validation.sh scripts/gofmt.sh
+	sh -n deploy/cloudflare/generate-config.sh deploy/cloudflare/publish-secrets.sh deploy/cloudflare/test-config.sh deploy/private-admin/generate-corefile.sh deploy/private-admin/test-feasibility.sh deploy/local-core.sh deploy/test-core-startup.sh deploy/migrate/atlas.sh deploy/migrate/entrypoint.sh deploy/migrate/test-validation.sh deploy/postgres/init/10-nexusrelay-roles.sh deploy/postgres/apply-login-passwords.sh deploy/postgres/verify-role-graph.sh deploy/postgres/test-initialization.sh deploy/operations/backup.sh deploy/operations/database-backup-container.sh deploy/operations/crypto-backup-container.sh deploy/operations/verify-backup.sh deploy/operations/restore.sh deploy/operations/restore-container.sh deploy/operations/restore-crypto.sh deploy/operations/restore-crypto-container.sh deploy/operations/test-restore.sh deploy/operations/graph-upgrade.sh deploy/operations/graph-upgrade-container.sh deploy/redis/entrypoint.sh deploy/redis/test-startup.sh deploy/secrets/publish.sh deploy/secrets/test-publication.sh deploy/traefik/entrypoint.sh deploy/traefik/test-config.sh scripts/gofmt.sh
 
 python-syntax-check:
 	python3 -c 'from pathlib import Path; paths = sorted(Path("tools").glob("*.py")) + sorted(Path("tests/compat/openai-sdk/python").glob("*.py")); [compile(path.read_bytes(), str(path), "exec") for path in paths]'
@@ -81,6 +85,9 @@ go-test:
 
 go-race:
 	go test -race ./...
+
+observability-test:
+	go test -race ./internal/observability ./internal/httpserver ./internal/dependency
 
 go-vet:
 	go vet ./...
@@ -148,6 +155,51 @@ atlas-validate-semantic:
 atlas-test: image-build-migrate
 	NEXUSRELAY_MIGRATE_IMAGE="nexusrelay-migrate:$$IMAGE_TAG" deploy/migrate/test-validation.sh
 
+compose-config:
+	docker compose -f deploy/compose.yaml --profile core config >/dev/null
+	docker compose -f deploy/compose.yaml --profile core --profile cloudflare config >/dev/null
+
+postgres-init-test:
+	deploy/postgres/test-initialization.sh
+
+backup-verify:
+	test -n "$${DATABASE_BACKUP_ARTIFACT-}" || { printf '%s\n' 'DATABASE_BACKUP_ARTIFACT is required'; exit 2; }
+	test -n "$${CRYPTO_BACKUP_ARTIFACT-}" || { printf '%s\n' 'CRYPTO_BACKUP_ARTIFACT is required'; exit 2; }
+	deploy/operations/verify-backup.sh "$$DATABASE_BACKUP_ARTIFACT" "$$CRYPTO_BACKUP_ARTIFACT"
+
+backup-restore-test:
+	deploy/operations/test-restore.sh
+
+redis-startup-test:
+	deploy/redis/test-startup.sh
+
+traefik-config-test:
+	deploy/traefik/test-config.sh
+
+cloudflare-config-test:
+	deploy/cloudflare/test-config.sh
+
+private-admin-feasibility-test:
+	deploy/private-admin/test-feasibility.sh
+
+secret-publication-test:
+	deploy/secrets/test-publication.sh
+
+local-core-init:
+	deploy/local-core.sh init
+
+local-core-up:
+	deploy/local-core.sh up
+
+local-core-check:
+	deploy/local-core.sh check
+
+local-core-down:
+	deploy/local-core.sh down
+
+local-core-test:
+	deploy/test-core-startup.sh
+
 image-build-go:
 	test -n "$${VERSION-}" || { printf '%s\n' 'VERSION is required'; exit 2; }
 	test -n "$${REVISION-}" || { printf '%s\n' 'REVISION is required'; exit 2; }
@@ -178,6 +230,9 @@ image-build-migrate:
 	deploy/migrate/atlas.sh build
 	docker tag nexusrelay-migrate:local "nexusrelay-migrate:$$IMAGE_TAG"
 
+image-pull-cloudflared:
+	docker pull cloudflare/cloudflared:2026.7.3@sha256:e39ee8da81ad5e05d77f38d2f51c60ca51bf2a8450ac3abab50c17fdb91d91bf
+
 test:
 	$(MAKE) go-test
 	$(MAKE) go-race
@@ -186,12 +241,19 @@ test:
 	$(MAKE) fixtures-validate
 	$(MAKE) sdk-replay
 	$(MAKE) atlas-test
+	$(MAKE) postgres-init-test
+	$(MAKE) backup-restore-test
+	$(MAKE) redis-startup-test
+	$(MAKE) traefik-config-test
+	$(MAKE) cloudflare-config-test
+	$(MAKE) secret-publication-test
 
 lint:
 	$(MAKE) fmt-check
 	$(MAKE) go-vet
 	$(MAKE) web-typecheck
 	$(MAKE) atlas-validate
+	$(MAKE) compose-config
 
 build:
 	$(MAKE) go-build

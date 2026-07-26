@@ -37,17 +37,17 @@ Completion requires an automated clean-clone installation test in a fresh enviro
 
 ## Phase 2: Core Docker Compose and Operations
 
-- [ ] Create the generic core Compose profile: Traefik, web, gateway, control-plane, worker, migrate, PostgreSQL, and Redis, including trusted empty-volume PostgreSQL init assets that create the five fixed `LOGIN` principals, closed five-role `NOLOGIN` graph, required ownership/memberships, and database/schema bootstrap grants before Atlas runs.
-- [ ] Make the core profile work on localhost without Cloudflare, Tailscale, or provider credentials.
-- [ ] Document and automate generation of development secret files with correct formats and permissions, distinct database-secret paths and values, and no committed or logged secret values.
-- [ ] Add a Phase 2 first-run flow covering `.env` creation, secret setup, PostgreSQL initialization, migrations, startup, health checks, and shutdown; explicitly state that owner bootstrap is unavailable until Phase 4.
-- [ ] Add health checks, dependency readiness, restart policies, resource limits, and graceful shutdown.
-- [ ] Add protected secret mounts and named PostgreSQL/Traefik state volumes.
-- [ ] Add optional Cloudflare Tunnel profile driven by `PUBLIC_API_BASE_URL`.
-- [ ] Validate Tailscale/CoreDNS profile feasibility on macOS/Docker Desktop or approve and document a host-Tailscale alternative; update ADR 0002 to Accepted before implementation.
-- [ ] Add the accepted optional private-admin profile driven by `ADMIN_BASE_URL` and private subnet settings.
-- [ ] Add structured redacted logging, Prometheus metrics, and optional OpenTelemetry setup.
-- [ ] Add backup, restore, key-ring recovery, and upgrade runbooks, including exact `pg_auth_members` edge-option and `pg_roles` attribute verification plus the audited pre-Atlas cluster-admin procedure for exceptional graph upgrades.
+- [x] Create the generic core Compose profile: Traefik, web, gateway, control-plane, worker, migrate, PostgreSQL, and Redis, including trusted empty-volume PostgreSQL init assets that create the five fixed `LOGIN` principals, closed five-role `NOLOGIN` graph, required ownership/memberships, and database/schema bootstrap grants before Atlas runs.
+- [x] Make the core profile work on localhost without Cloudflare, Tailscale, or provider credentials.
+- [x] Document and automate generation of development secret files with correct formats and permissions, distinct database-secret paths and values, and no committed or logged secret values.
+- [x] Add a Phase 2 first-run flow covering `.env` creation, secret setup, PostgreSQL initialization, migrations, startup, health checks, and shutdown; explicitly state that owner bootstrap is unavailable until Phase 4.
+- [x] Add health checks, dependency readiness, restart policies, resource limits, and graceful shutdown.
+- [x] Add protected secret mounts and named PostgreSQL/Traefik state volumes.
+- [x] Add optional Cloudflare Tunnel profile driven by `PUBLIC_API_BASE_URL`.
+- [ ] Validate Tailscale/CoreDNS profile feasibility on macOS/Docker Desktop or approve and document a host-Tailscale alternative; complete the blocking operator prerequisites in `USER_TODO.md` and update ADR 0002 to Accepted before implementation.
+- [ ] After the applicable `USER_TODO.md` gate is explicitly confirmed and ADR 0002 is Accepted, add the optional private-admin profile driven by `ADMIN_BASE_URL` and private subnet settings.
+- [x] Add structured redacted logging, Prometheus metrics, and optional OpenTelemetry setup.
+- [x] Add backup, restore, key-ring recovery, and upgrade runbooks, including exact `pg_auth_members` edge-option and `pg_roles` attribute verification plus the audited pre-Atlas cluster-admin procedure for exceptional graph upgrades.
 
 ## Phase 3: PostgreSQL, RLS, and Outbox
 

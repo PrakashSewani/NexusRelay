@@ -41,7 +41,8 @@ var inventory = map[string]SettingClass{
 	"PUBLIC_API_BASE_URL": {Consumers: []Process{ProcessGateway, ProcessControlPlane, ProcessDeployment}}, "ADMIN_BASE_URL": {Consumers: []Process{ProcessControlPlane, ProcessDeployment}}, "PUBLIC_API_HOST": {Consumers: []Process{ProcessDeployment}}, "ADMIN_HOST": {Consumers: []Process{ProcessDeployment}}, "ADMIN_EXPOSURE_MODE": {Consumers: []Process{ProcessDeployment}}, "ADMIN_ORIGINS": {Consumers: []Process{ProcessControlPlane, ProcessDeployment}}, "TRUSTED_PROXY_CIDRS": {Consumers: []Process{ProcessGateway, ProcessControlPlane, ProcessDeployment}},
 	"HTTP_BIND_ADDRESS": {Consumers: []Process{ProcessGateway, ProcessControlPlane, ProcessWorker, ProcessDeployment}}, "HTTP_PORT": {Consumers: []Process{ProcessGateway, ProcessControlPlane, ProcessWorker, ProcessDeployment}}, "HTTPS_PORT": {Consumers: []Process{ProcessDeployment}}, "TLS_MODE": {Consumers: []Process{ProcessDeployment}}, "TLS_CERT_FILE": {Consumers: []Process{ProcessDeployment}}, "TLS_KEY_FILE": {Secret: true, Consumers: []Process{ProcessDeployment}}, "ACME_EMAIL": {Consumers: []Process{ProcessDeployment}}, "ACME_DNS_PROVIDER": {Consumers: []Process{ProcessDeployment}}, "ACME_DNS_API_TOKEN_FILE": {Secret: true, Consumers: []Process{ProcessDeployment}},
 	"POSTGRES_DB": {Consumers: []Process{ProcessDeployment}}, "POSTGRES_USER": {Consumers: []Process{ProcessDeployment}}, "POSTGRES_PASSWORD_FILE": {Secret: true, Consumers: []Process{ProcessDeployment}}, "DATABASE_HOST": {Consumers: []Process{ProcessGateway, ProcessControlPlane, ProcessWorker, ProcessBootstrap}}, "DATABASE_PORT": {Consumers: []Process{ProcessGateway, ProcessControlPlane, ProcessWorker, ProcessBootstrap}}, "DATABASE_NAME": {Consumers: []Process{ProcessGateway, ProcessControlPlane, ProcessWorker, ProcessBootstrap, ProcessDeployment}}, "DATABASE_MIGRATION_USER": {Consumers: []Process{ProcessDeployment}}, "DATABASE_MIGRATION_PASSWORD_FILE": {Secret: true, Consumers: []Process{ProcessDeployment}}, "DATABASE_GATEWAY_USER": {Consumers: []Process{ProcessGateway, ProcessDeployment}}, "DATABASE_GATEWAY_PASSWORD_FILE": {Secret: true, Consumers: []Process{ProcessGateway, ProcessDeployment}}, "DATABASE_CONTROL_PLANE_USER": {Consumers: []Process{ProcessControlPlane, ProcessBootstrap, ProcessDeployment}}, "DATABASE_CONTROL_PLANE_PASSWORD_FILE": {Secret: true, Consumers: []Process{ProcessControlPlane, ProcessBootstrap, ProcessDeployment}}, "DATABASE_WORKER_USER": {Consumers: []Process{ProcessWorker, ProcessDeployment}}, "DATABASE_WORKER_PASSWORD_FILE": {Secret: true, Consumers: []Process{ProcessWorker, ProcessDeployment}}, "DATABASE_SSLMODE": {Consumers: []Process{ProcessGateway, ProcessControlPlane, ProcessWorker, ProcessBootstrap, ProcessDeployment}}, "DATABASE_MIN_CONNECTIONS_GATEWAY": {Consumers: []Process{ProcessGateway}}, "DATABASE_MAX_CONNECTIONS_GATEWAY": {Consumers: []Process{ProcessGateway}}, "DATABASE_MIN_CONNECTIONS_CONTROL_PLANE": {Consumers: []Process{ProcessControlPlane, ProcessBootstrap}}, "DATABASE_MAX_CONNECTIONS_CONTROL_PLANE": {Consumers: []Process{ProcessControlPlane, ProcessBootstrap}}, "DATABASE_MIN_CONNECTIONS_WORKER": {Consumers: []Process{ProcessWorker}}, "DATABASE_MAX_CONNECTIONS_WORKER": {Consumers: []Process{ProcessWorker}}, "DATABASE_STATEMENT_TIMEOUT": {Consumers: []Process{ProcessGateway, ProcessControlPlane, ProcessWorker, ProcessBootstrap}}, "DATABASE_TRANSACTION_TIMEOUT": {Consumers: []Process{ProcessGateway, ProcessControlPlane, ProcessWorker, ProcessBootstrap}},
-	"REDIS_URL_FILE": {Secret: true, Consumers: []Process{ProcessGateway, ProcessControlPlane, ProcessWorker}}, "REDIS_MAX_CONNECTIONS_GATEWAY": {Consumers: []Process{ProcessGateway}}, "REDIS_MAX_CONNECTIONS_CONTROL_PLANE": {Consumers: []Process{ProcessControlPlane}}, "REDIS_MAX_CONNECTIONS_WORKER": {Consumers: []Process{ProcessWorker}},
+	"REDIS_URL_FILE": {Secret: true, Consumers: []Process{ProcessGateway, ProcessControlPlane, ProcessWorker, ProcessDeployment}}, "REDIS_PASSWORD_FILE": {Secret: true, Consumers: []Process{ProcessDeployment}}, "REDIS_MAX_CONNECTIONS_GATEWAY": {Consumers: []Process{ProcessGateway}}, "REDIS_MAX_CONNECTIONS_CONTROL_PLANE": {Consumers: []Process{ProcessControlPlane}}, "REDIS_MAX_CONNECTIONS_WORKER": {Consumers: []Process{ProcessWorker}},
+	"DEPENDENCY_STARTUP_TIMEOUT": {Consumers: []Process{ProcessGateway, ProcessControlPlane, ProcessWorker}}, "DEPENDENCY_PROBE_TIMEOUT": {Consumers: []Process{ProcessGateway, ProcessControlPlane, ProcessWorker}}, "DEPENDENCY_PROBE_INTERVAL": {Consumers: []Process{ProcessGateway, ProcessControlPlane, ProcessWorker}}, "DEPENDENCY_RETRY_MIN_DELAY": {Consumers: []Process{ProcessGateway, ProcessControlPlane, ProcessWorker}}, "DEPENDENCY_RETRY_MAX_DELAY": {Consumers: []Process{ProcessGateway, ProcessControlPlane, ProcessWorker}},
 	"MASTER_KEYRING_FILE": {Secret: true, Consumers: []Process{ProcessGateway, ProcessControlPlane, ProcessWorker}}, "API_KEY_PEPPER_RING_FILE": {Secret: true, Consumers: []Process{ProcessGateway, ProcessControlPlane}}, "SESSION_SECRET_FILE": {Secret: true, Consumers: []Process{ProcessControlPlane}}, "CSRF_SECRET_RING_FILE": {Secret: true, Consumers: []Process{ProcessControlPlane}},
 	"SESSION_COOKIE_NAME": {Consumers: []Process{ProcessControlPlane}}, "SESSION_IDLE_TTL": {Consumers: []Process{ProcessControlPlane}}, "SESSION_ABSOLUTE_TTL": {Consumers: []Process{ProcessControlPlane}}, "SESSION_LAST_SEEN_WRITE_INTERVAL": {Consumers: []Process{ProcessControlPlane}}, "PASSWORD_ARGON2_MEMORY_KIB": {Consumers: []Process{ProcessControlPlane, ProcessBootstrap}}, "PASSWORD_ARGON2_ITERATIONS": {Consumers: []Process{ProcessControlPlane, ProcessBootstrap}}, "PASSWORD_ARGON2_PARALLELISM": {Consumers: []Process{ProcessControlPlane, ProcessBootstrap}},
 	"REQUEST_BODY_MAX_BYTES": {Consumers: []Process{ProcessGateway}}, "UPSTREAM_CONNECT_TIMEOUT": {Consumers: []Process{ProcessGateway}}, "UPSTREAM_FIRST_BYTE_TIMEOUT": {Consumers: []Process{ProcessGateway}}, "UPSTREAM_IDLE_TIMEOUT": {Consumers: []Process{ProcessGateway}}, "UPSTREAM_TOTAL_TIMEOUT": {Consumers: []Process{ProcessGateway, ProcessWorker}}, "SHUTDOWN_GRACE_PERIOD": {Consumers: []Process{ProcessGateway, ProcessControlPlane, ProcessWorker, ProcessDeployment}}, "MAX_UPSTREAM_ATTEMPTS": {Consumers: []Process{ProcessGateway}},
@@ -138,6 +139,14 @@ type Redis struct {
 	MaxConnections int
 }
 
+type DependencyReadiness struct {
+	StartupTimeout time.Duration
+	ProbeTimeout   time.Duration
+	ProbeInterval  time.Duration
+	RetryMinimum   time.Duration
+	RetryMaximum   time.Duration
+}
+
 type Observability struct {
 	LogLevel     string
 	LogFormat    string
@@ -230,14 +239,15 @@ type DatabaseInventory struct {
 }
 
 type Deployment struct {
-	Shared     SharedDeployment
-	Endpoints  Endpoints
-	HTTP       HTTP
-	HTTPSPort  int
-	TLS        TLS
-	Database   DatabaseInventory
-	Cloudflare Cloudflare
-	Tailscale  Tailscale
+	Shared        SharedDeployment
+	Endpoints     Endpoints
+	HTTP          HTTP
+	HTTPSPort     int
+	TLS           TLS
+	Database      DatabaseInventory
+	RedisPassword Secret
+	Cloudflare    Cloudflare
+	Tailscale     Tailscale
 }
 
 type Gateway struct {
@@ -246,6 +256,7 @@ type Gateway struct {
 	HTTP          HTTP
 	Database      Database
 	Redis         Redis
+	Readiness     DependencyReadiness
 	Observability Observability
 	Policy        GatewayPolicy
 	ProviderKeys  ProviderKeyRing
@@ -259,6 +270,7 @@ type ControlPlane struct {
 	HTTP          HTTP
 	Database      Database
 	Redis         Redis
+	Readiness     DependencyReadiness
 	Observability Observability
 	Sessions      SessionPolicy
 	ProviderKeys  ProviderKeyRing
@@ -273,6 +285,7 @@ type Worker struct {
 	HTTP          HTTP
 	Database      Database
 	Redis         Redis
+	Readiness     DependencyReadiness
 	Observability Observability
 	Policy        WorkerPolicy
 	ProviderKeys  ProviderKeyRing
@@ -326,6 +339,10 @@ func ParseGateway(v map[string]string) (Gateway, error) {
 	if err != nil {
 		return Gateway{}, err
 	}
+	readiness, err := parseDependencyReadiness(v)
+	if err != nil {
+		return Gateway{}, err
+	}
 	provider, err := ReadProviderKeyRing(requiredPath(v, "MASTER_KEYRING_FILE", "/run/secrets/provider_master_keyring"))
 	if err != nil {
 		return Gateway{}, err
@@ -338,7 +355,7 @@ func ParseGateway(v map[string]string) (Gateway, error) {
 	if err != nil {
 		return Gateway{}, err
 	}
-	return Gateway{shared, endpoints, http, db, redis, obs, policy, provider, peppers, OptionalIngress{}}, nil
+	return Gateway{shared, endpoints, http, db, redis, readiness, obs, policy, provider, peppers, OptionalIngress{}}, nil
 }
 
 func ParseControlPlane(v map[string]string) (ControlPlane, error) {
@@ -361,6 +378,10 @@ func ParseControlPlane(v map[string]string) (ControlPlane, error) {
 	if err != nil {
 		return ControlPlane{}, err
 	}
+	readiness, err := parseDependencyReadiness(v)
+	if err != nil {
+		return ControlPlane{}, err
+	}
 	provider, err := ReadProviderKeyRing(requiredPath(v, "MASTER_KEYRING_FILE", "/run/secrets/provider_master_keyring"))
 	if err != nil {
 		return ControlPlane{}, err
@@ -380,7 +401,7 @@ func ParseControlPlane(v map[string]string) (ControlPlane, error) {
 	if err != nil {
 		return ControlPlane{}, err
 	}
-	return ControlPlane{shared, endpoints, http, db, redis, obs, sessions, provider, peppers, agent, OptionalIngress{}}, nil
+	return ControlPlane{shared, endpoints, http, db, redis, readiness, obs, sessions, provider, peppers, agent, OptionalIngress{}}, nil
 }
 
 func ParseWorker(v map[string]string) (Worker, error) {
@@ -399,6 +420,10 @@ func ParseWorker(v map[string]string) (Worker, error) {
 	if err != nil {
 		return Worker{}, err
 	}
+	readiness, err := parseDependencyReadiness(v)
+	if err != nil {
+		return Worker{}, err
+	}
 	provider, err := ReadProviderKeyRing(requiredPath(v, "MASTER_KEYRING_FILE", "/run/secrets/provider_master_keyring"))
 	if err != nil {
 		return Worker{}, err
@@ -407,7 +432,37 @@ func ParseWorker(v map[string]string) (Worker, error) {
 	if err != nil {
 		return Worker{}, err
 	}
-	return Worker{shared, Endpoints{}, http, db, redis, obs, policy, provider, OptionalIngress{}}, nil
+	return Worker{shared, Endpoints{}, http, db, redis, readiness, obs, policy, provider, OptionalIngress{}}, nil
+}
+
+func parseDependencyReadiness(v map[string]string) (DependencyReadiness, error) {
+	startup, err := duration(v, "DEPENDENCY_STARTUP_TIMEOUT", 60*time.Second, time.Second, 10*time.Minute)
+	if err != nil {
+		return DependencyReadiness{}, err
+	}
+	probe, err := duration(v, "DEPENDENCY_PROBE_TIMEOUT", 3*time.Second, 100*time.Millisecond, time.Minute)
+	if err != nil {
+		return DependencyReadiness{}, err
+	}
+	interval, err := duration(v, "DEPENDENCY_PROBE_INTERVAL", 5*time.Second, time.Second, time.Minute)
+	if err != nil {
+		return DependencyReadiness{}, err
+	}
+	minimum, err := duration(v, "DEPENDENCY_RETRY_MIN_DELAY", 100*time.Millisecond, 10*time.Millisecond, time.Minute)
+	if err != nil {
+		return DependencyReadiness{}, err
+	}
+	maximum, err := duration(v, "DEPENDENCY_RETRY_MAX_DELAY", 2*time.Second, 10*time.Millisecond, time.Minute)
+	if err != nil {
+		return DependencyReadiness{}, err
+	}
+	if probe >= startup {
+		return DependencyReadiness{}, fmt.Errorf("DEPENDENCY_PROBE_TIMEOUT must be less than DEPENDENCY_STARTUP_TIMEOUT")
+	}
+	if minimum > maximum {
+		return DependencyReadiness{}, fmt.Errorf("DEPENDENCY_RETRY_MIN_DELAY must not exceed DEPENDENCY_RETRY_MAX_DELAY")
+	}
+	return DependencyReadiness{startup, probe, interval, minimum, maximum}, nil
 }
 
 func ParseBootstrap(v map[string]string) (Bootstrap, error) {
@@ -493,7 +548,11 @@ func ParseDeployment(v map[string]string) (Deployment, error) {
 	if err != nil {
 		return Deployment{}, err
 	}
-	cloudflare, err := parseCloudflare(v, endpoints)
+	redisPassword, err := parseRedisDeployment(v)
+	if err != nil {
+		return Deployment{}, err
+	}
+	cloudflare, err := parseCloudflare(v, endpoints, tls)
 	if err != nil {
 		return Deployment{}, err
 	}
@@ -501,7 +560,32 @@ func ParseDeployment(v map[string]string) (Deployment, error) {
 	if err != nil {
 		return Deployment{}, err
 	}
-	return Deployment{shared, endpoints, http, httpsPort, tls, database, cloudflare, tailscale}, nil
+	return Deployment{shared, endpoints, http, httpsPort, tls, database, redisPassword, cloudflare, tailscale}, nil
+}
+
+func parseRedisDeployment(v map[string]string) (Secret, error) {
+	password, err := ReadSimpleSecret("REDIS_PASSWORD_FILE", requiredPath(v, "REDIS_PASSWORD_FILE", "/run/secrets/redis_password"), 4*1024)
+	if err != nil {
+		return Secret{}, err
+	}
+	if !regexp.MustCompile(`^[A-Za-z0-9_-]{32,}$`).MatchString(password.Reveal()) {
+		return Secret{}, fmt.Errorf("REDIS_PASSWORD_FILE must contain at least 32 base64url characters")
+	}
+	_, redisURL, err := ReadURISecret("REDIS_URL_FILE", requiredPath(v, "REDIS_URL_FILE", "/run/secrets/redis_url"), 4*1024, "redis", "rediss")
+	if err != nil {
+		return Secret{}, err
+	}
+	if redisURL.User == nil {
+		return Secret{}, fmt.Errorf("REDIS_URL_FILE must contain Redis authentication credentials")
+	}
+	if username := redisURL.User.Username(); username != "" && username != "default" {
+		return Secret{}, fmt.Errorf("REDIS_URL_FILE username must be empty or default")
+	}
+	urlPassword, ok := redisURL.User.Password()
+	if !ok || urlPassword != password.Reveal() {
+		return Secret{}, fmt.Errorf("REDIS_PASSWORD_FILE must match the password in REDIS_URL_FILE")
+	}
+	return password, nil
 }
 
 func preflight(v map[string]string, process Process) error {
@@ -747,7 +831,7 @@ func parseDatabaseInventory(v map[string]string, environment string) (DatabaseIn
 	return DatabaseInventory{postgresDB, clusterAdminUser, migrationUser, gatewayUser, controlPlaneUser, workerUser, paths, sslmode}, nil
 }
 
-func parseCloudflare(v map[string]string, endpoints Endpoints) (Cloudflare, error) {
+func parseCloudflare(v map[string]string, endpoints Endpoints, tls TLS) (Cloudflare, error) {
 	enabled, err := boolean(v, "ENABLE_CLOUDFLARE_TUNNEL", false)
 	if err != nil {
 		return Cloudflare{}, err
@@ -758,6 +842,9 @@ func parseCloudflare(v map[string]string, endpoints Endpoints) (Cloudflare, erro
 	}
 	if endpoints.PublicAPIBaseURL.Scheme != "https" {
 		return Cloudflare{}, fmt.Errorf("ENABLE_CLOUDFLARE_TUNNEL requires PUBLIC_API_BASE_URL to use https")
+	}
+	if tls.Mode != "acme" || tls.ACMEDNSProvider != "cloudflare" {
+		return Cloudflare{}, fmt.Errorf("ENABLE_CLOUDFLARE_TUNNEL requires TLS_MODE=acme and ACME_DNS_PROVIDER=cloudflare")
 	}
 	if err := validatePublicTunnelHosts(endpoints); err != nil {
 		return Cloudflare{}, err
@@ -1063,6 +1150,9 @@ func parseObservability(v map[string]string) (Observability, error) {
 		endpoint, err = absoluteURL("OTEL_EXPORTER_OTLP_ENDPOINT", raw)
 		if err != nil {
 			return Observability{}, err
+		}
+		if endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+			return Observability{}, fmt.Errorf("OTEL_EXPORTER_OTLP_ENDPOINT must not contain userinfo, query, or fragment")
 		}
 	}
 	if otel && endpoint == nil {

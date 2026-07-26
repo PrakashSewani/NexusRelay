@@ -133,6 +133,9 @@ jobs:
           - image: migrate
             target: image-build-migrate
             tag: nexusrelay-migrate:ci
+          - image: cloudflared
+            target: image-pull-cloudflared
+            tag: cloudflare/cloudflared:2026.7.3
     env:
       VERSION: ci
       REVISION: ${{ github.sha }}

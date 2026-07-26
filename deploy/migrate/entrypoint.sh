@@ -145,6 +145,7 @@ validate_password_file "$DATABASE_MIGRATION_PASSWORD_FILE"
 exec /atlas migrate apply \
   --config file://atlas.hcl \
   --env nexusrelay \
+  --revisions-schema nexusrelay_migration \
   --tx-mode file \
   --exec-order linear \
   --lock-timeout 60s

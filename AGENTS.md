@@ -18,6 +18,7 @@ Read the applicable project documentation before designing or implementing chang
 8. Accepted ADRs under `docs/adr/` define consequential architecture decisions made after these documents.
 9. `docs/phases/phase-1/README.md` records the implemented repository foundation, accepted verification evidence, decisions future code must preserve, and explicit non-capabilities. Read it before any code decision that builds on or changes Phase 1 foundations.
 10. `TODO.md` is the implementation handoff sequence. It tracks delivery work but does not override requirements or design documents.
+11. `USER_TODO.md` tracks blocking actions assigned to the user or deployment operator. Its completion gate is mandatory for dependent work.
 
 Treat `docs/requirements.md` as authoritative for product scope and the applicable LLD/ADR as authoritative for implementation behavior. Keep them synchronized whenever an approved decision changes.
 
@@ -67,6 +68,10 @@ The gateway, control plane, and worker are separate binaries and Docker containe
 - Inspect relevant code, tests, migrations, and documentation before editing.
 - Before making a code decision that changes established tooling, process boundaries, configuration, generated contracts, images, migrations, or CI/security behavior, read `docs/phases/phase-1/README.md` and preserve its accepted foundation unless the authoritative requirements/design/ADR is intentionally updated.
 - At the start of an implementation session, read `TODO.md`, select the earliest unblocked item, and confirm its provider/design prerequisites are complete.
+- At the start of an implementation session, read `USER_TODO.md`. Before starting work that depends on a user-assigned item, ask the user whether every applicable unchecked prerequisite has been completed.
+- Check a user-assigned item in `USER_TODO.md` only after the user explicitly confirms completion. Verify non-secret evidence when feasible, but never request that secret values be pasted into chat or committed.
+- If the user says a blocking item is incomplete, does not clearly confirm it, or cannot provide required non-secret evidence, do not proceed with that item or any downstream dependent work. Leave it unchecked, state the blocker briefly, and wait for the user.
+- Do not infer completion from earlier plans, partial setup, local feasibility tests, or the existence of files. Ask for confirmation in the current session before crossing the gate.
 - Keep `TODO.md` current as implementation progresses. Check an item only after code, tests, generated artifacts, and required documentation are complete.
 - Cite the applicable requirement IDs and design sections in implementation plans, pull requests, or substantial change summaries.
 - Make the smallest complete change that satisfies the requirement.

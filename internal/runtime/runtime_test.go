@@ -18,7 +18,7 @@ func TestRunWithoutReadinessServesLiveWhileRemainingNotReady(t *testing.T) {
 		t.Fatal(err)
 	}
 	health := &httpserver.Health{}
-	server := httpserver.New(listener.Addr().String(), health.Handler(), time.Second)
+	server := httpserver.New(listener.Addr().String(), health.Handler(nil), time.Second)
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {

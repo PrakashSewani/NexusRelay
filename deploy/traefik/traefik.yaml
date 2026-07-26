@@ -1,0 +1,26 @@
+api:
+  dashboard: false
+
+entryPoints:
+  web:
+    address: ":8080"
+    forwardedHeaders:
+      insecure: false
+  websecure:
+    address: ":8443"
+    forwardedHeaders:
+      insecure: false
+providers:
+  file:
+    filename: /tmp/dynamic.yaml
+    watch: false
+
+accessLog:
+  format: json
+  fields:
+    headers:
+      defaultMode: drop
+
+log:
+  format: json
+  level: INFO
