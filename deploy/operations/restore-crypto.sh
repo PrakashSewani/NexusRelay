@@ -16,7 +16,7 @@ destination=$2
 [ "$(mode_of "$destination")" = 700 ] || fail 'EMPTY_DESTINATION must have mode 0700'
 [ -z "$(ls -A "$destination")" ] || fail 'EMPTY_DESTINATION must be empty'
 
-docker run --rm --network none --read-only \
+docker run --rm --network none --read-only --user "$(id -u):$(id -g)" \
   --mount "type=bind,src=$ROOT_DIR/deploy/operations/restore-crypto-container.sh,dst=/opt/nexusrelay/restore.sh,readonly" \
   --mount "type=bind,src=$artifact,dst=/artifact,readonly" \
   --mount "type=bind,src=$destination,dst=/destination" \
