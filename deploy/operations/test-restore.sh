@@ -9,11 +9,13 @@ test_id="nexusrelay-restore-$$"
 network="$test_id"
 source_container="$test_id-source"
 restore_container="$test_id-target"
+source_secret_volume="$test_id-source-secrets"
 work=$(mktemp -d)
 
 cleanup() {
   docker rm --force "$source_container" "$restore_container" >/dev/null 2>&1 || true
   docker network rm "$network" >/dev/null 2>&1 || true
+  docker volume rm "$source_secret_volume" >/dev/null 2>&1 || true
   rm -rf "$work"
 }
 trap cleanup EXIT HUP INT TERM
@@ -32,6 +34,13 @@ write_secret csrf_secret_ring '{"version":1,"active_key_id":"csrf-test","keys":[
 write_secret session_secret 'REREREREREREREREREREREREREREREREREREREREREQ='
 write_secret restore_admin_password restore-admin-password
 
+docker volume create "$source_secret_volume" >/dev/null
+docker run --rm --user 0:0 --network none \
+  --mount "type=bind,src=$work/secrets,dst=/source,readonly" \
+  --mount "type=volume,src=$source_secret_volume,dst=/target" \
+  busybox:1.37.0-uclibc@sha256:39e0df8c4d65953b55c344f017e1ff2e0031a7454b3c24e6b76d402f207e315a \
+  sh -ec 'cp /source/postgres_*_password /target/ && chown 999:999 /target/* && chmod 0400 /target/*'
+
 docker network create "$network" >/dev/null
 docker run --detach --name "$source_container" --network "$network" \
   --env POSTGRES_DB=nexusrelay --env POSTGRES_USER=nexusrelay_cluster_admin \
@@ -42,7 +51,7 @@ docker run --detach --name "$source_container" --network "$network" \
   --env DATABASE_CONTROL_PLANE_USER=nexusrelay_control_plane --env DATABASE_CONTROL_PLANE_PASSWORD_FILE=/run/secrets/postgres_control_plane_password \
   --env DATABASE_WORKER_USER=nexusrelay_worker --env DATABASE_WORKER_PASSWORD_FILE=/run/secrets/postgres_worker_password \
   --mount "type=bind,src=$ROOT_DIR/deploy/postgres/init/10-nexusrelay-roles.sh,dst=/docker-entrypoint-initdb.d/10-nexusrelay-roles.sh,readonly" \
-  --mount "type=bind,src=$work/secrets,dst=/run/secrets,readonly" "$POSTGRES_IMAGE" >/dev/null
+  --mount "type=volume,src=$source_secret_volume,dst=/run/secrets,readonly" "$POSTGRES_IMAGE" >/dev/null
 
 attempt=0
 until docker run --rm --network "$network" "$POSTGRES_IMAGE" pg_isready -q -h "$source_container" -U nexusrelay_cluster_admin -d nexusrelay; do attempt=$((attempt + 1)); [ "$attempt" -lt 60 ] || exit 1; sleep 1; done
