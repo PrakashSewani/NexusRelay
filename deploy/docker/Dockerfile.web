@@ -1,0 +1,77 @@
+# syntax=docker.io/docker/dockerfile:1.7.1@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
+
+FROM node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d AS dependencies
+
+ARG VERSION
+ARG REVISION
+ARG SOURCE_DATE_EPOCH
+
+WORKDIR /src
+
+ENV COREPACK_HOME=/corepack \
+    NEXT_TELEMETRY_DISABLED=1
+
+RUN case "${VERSION}" in ""|*[!A-Za-z0-9._+-]*) echo "VERSION must match [A-Za-z0-9._+-]+" >&2; exit 1;; esac && \
+    case "${REVISION}" in [A-Za-z0-9]*);; *) echo "REVISION must start with an ASCII letter or number" >&2; exit 1;; esac && \
+    case "${REVISION}" in *[!A-Za-z0-9._-]*) echo "REVISION must match [A-Za-z0-9][A-Za-z0-9._-]{0,127}" >&2; exit 1;; esac && \
+    test "${#REVISION}" -le 128 || { echo "REVISION must be at most 128 characters" >&2; exit 1; } && \
+    case "${SOURCE_DATE_EPOCH}" in ""|*[!0-9]*) echo "SOURCE_DATE_EPOCH must be a non-empty Unix timestamp" >&2; exit 1;; esac && \
+    corepack enable && corepack prepare pnpm@11.17.0 --activate
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/web/package.json apps/web/package.json
+
+RUN --mount=type=cache,id=nexusrelay-pnpm,target=/pnpm/store \
+    pnpm config set store-dir /pnpm/store && \
+    pnpm install --frozen-lockfile --filter @nexusrelay/web...
+
+FROM dependencies AS build
+
+ARG VERSION
+ARG REVISION
+ARG SOURCE_DATE_EPOCH
+
+ENV VERSION=${VERSION} \
+    REVISION=${REVISION} \
+    NEXUSRELAY_BUILD_REVISION=${REVISION} \
+    SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
+
+COPY apps/web apps/web
+
+# Keep the standalone asset layout stable when the application has no public directory.
+RUN case "${VERSION}" in ""|*[!A-Za-z0-9._+-]*) echo "VERSION must match [A-Za-z0-9._+-]+" >&2; exit 1;; esac && \
+    case "${REVISION}" in [A-Za-z0-9]*);; *) echo "REVISION must start with an ASCII letter or number" >&2; exit 1;; esac && \
+    case "${REVISION}" in *[!A-Za-z0-9._-]*) echo "REVISION must match [A-Za-z0-9][A-Za-z0-9._-]{0,127}" >&2; exit 1;; esac && \
+    test "${#REVISION}" -le 128 || { echo "REVISION must be at most 128 characters" >&2; exit 1; } && \
+    case "${SOURCE_DATE_EPOCH}" in ""|*[!0-9]*) echo "SOURCE_DATE_EPOCH must be a non-empty Unix timestamp" >&2; exit 1;; esac && \
+    mkdir -p apps/web/public && \
+    pnpm --filter @nexusrelay/web build && \
+    find apps/web/.next apps/web/public -exec touch --no-dereference --date="@${SOURCE_DATE_EPOCH}" {} +
+
+FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:af85d11ce7ef10172855a6e3649e3e8125b1b9e3ca41849ec2918036f05cb212
+
+ARG VERSION
+ARG REVISION
+
+LABEL org.opencontainers.image.title="NexusRelay web" \
+      org.opencontainers.image.description="Standalone NexusRelay administrative web application" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${REVISION}" \
+      org.opencontainers.image.source="https://github.com/PrakashSewani/NexusRelay"
+
+WORKDIR /app
+
+ENV HOSTNAME=0.0.0.0 \
+    NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PORT=3000
+
+COPY --from=build --chown=65532:65532 /src/apps/web/.next/standalone/ ./
+COPY --from=build --chown=65532:65532 /src/apps/web/.next/static/ ./apps/web/.next/static/
+COPY --from=build --chown=65532:65532 /src/apps/web/public/ ./apps/web/public/
+
+USER 65532:65532
+EXPOSE 3000
+
+ENTRYPOINT ["/nodejs/bin/node"]
+CMD ["apps/web/server.js"]

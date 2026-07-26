@@ -22,6 +22,8 @@ NexusRelay separates latency-sensitive inference, administrative traffic, and as
 
 The Go application image contains distinct gateway, control-plane, and worker binaries built from the same source revision. The migration container uses the separately pinned Atlas Community CLI and repository-owned SQL migration directory from that revision, as defined by ADR 0007.
 
+PostgreSQL credentials follow process boundaries. The five V1 `LOGIN` principal names are fixed product identifiers, not operator-selected database semantics: `nexusrelay_cluster_admin`, `nexusrelay_migration`, `nexusrelay_gateway`, `nexusrelay_control_plane`, and `nexusrelay_worker`. Environment variables carry these names because official images and processes consume them, but startup validation requires the exact values and requires `POSTGRES_DB == DATABASE_NAME`. The cluster-admin login is used only by trusted empty-volume initialization, explicit audited role-graph upgrades, and reviewed recovery. Atlas and each runtime process otherwise receive only their own password file.
+
 ## Network Routes
 
 ```text
@@ -88,14 +90,18 @@ PostgreSQL and Redis never publish host ports in the production Compose profile.
 
 ## Startup Sequence
 
-1. PostgreSQL and Redis start and report readiness.
-2. `migrate` validates the committed Atlas migration directory and checksum, obtains Atlas's PostgreSQL advisory migration lock, and applies pending forward migrations.
-3. `gateway`, `control-plane`, and `worker` start only after migration success.
+1. PostgreSQL starts. On an empty data volume only, trusted Phase 2 initialization uses `nexusrelay_cluster_admin` to create the application database, all five fixed `LOGIN` principals, and the closed foundational `NOLOGIN` role graph: `nexusrelay_schema_owner`, `nexusrelay_security_definer_owner`, `nexusrelay_gateway_runtime`, `nexusrelay_control_plane_runtime`, and `nexusrelay_worker_runtime`. PostgreSQL initialization is the sole container allowed to receive all five database password files; secret-generation/init tooling validates distinct paths and distinct values without logging values. Passwords are not embedded in migrations or committed SQL. Redis starts and both dependencies report readiness.
+2. `migrate` connects only as `nexusrelay_migration`, validates the committed Atlas migration directory and checksum, obtains Atlas's PostgreSQL advisory migration lock, and applies pending forward migrations.
+3. `gateway`, `control-plane`, and `worker` start with their distinct runtime logins only after migration success.
 4. `web` starts independently but displays a service-unavailable state until control-plane readiness succeeds.
 5. Traefik obtains/loads certificates and routes only to healthy application containers.
 6. Enabled optional profile containers establish their configured routes after origin readiness.
 
 Compose dependency declarations are not considered sufficient readiness guarantees; each process retries dependency connection during a bounded startup window and then fails with a sanitized actionable error.
+
+Initialization establishes exact ownership and PostgreSQL 18 membership outcomes before Atlas runs. Both `nexusrelay_migration -> nexusrelay_schema_owner` and `nexusrelay_migration -> nexusrelay_security_definer_owner` have `ADMIN FALSE, INHERIT FALSE, SET TRUE`. Migration therefore does not automatically inherit owner privileges and reviewed migration SQL must explicitly use `SET ROLE`. The schema-owner role owns application schemas, tables, types, and policies; the security-definer-owner role owns every `SECURITY DEFINER` function and cannot log in. Each runtime edge (`nexusrelay_gateway`, `nexusrelay_control_plane`, or `nexusrelay_worker` to its corresponding runtime role) has `ADMIN FALSE, INHERIT TRUE, SET FALSE`. Runtime processes receive granted object/function privileges through inheritance but cannot `SET ROLE` into the group identity or administer membership.
+
+Initialization also revokes unsafe `PUBLIC` schema creation, grants the migration login the bounded database connection, temporary-object, and schema-bootstrap authority required by Atlas, and creates or transfers the application schema as needed for the first migration. Exact PostgreSQL 18 grant syntax is implementation-tested, but the resulting ownership and per-membership `admin_option`, `inherit_option`, and `set_option` values are mandatory. The role-level `INHERIT` attribute is only the default used when a role is later made a member; it does not override an explicit membership option. Migration and all foundational `NOLOGIN` roles use role-level `NOINHERIT` as a defensive default, while runtime LOGIN roles use `INHERIT`; effective access still follows the explicit edges above. No future arbitrary role creation is required for V1. A role-graph change is an exceptional deployment upgrade performed by an explicit audited cluster-admin provisioning command/runbook before Atlas, never by a normal migration.
 
 ## Health Endpoints
 

@@ -24,36 +24,36 @@ Completion requires an automated clean-clone installation test in a fresh enviro
 
 ## Phase 1: Repository Foundation
 
-- [ ] Initialize the Go module and root workspace/tooling files.
-- [ ] Create `apps/gateway`, `apps/control-plane`, and `apps/worker` entrypoints.
-- [ ] Create the authoritative `/api/control/v1` OpenAPI 3.0.3 source-contract skeleton, pinned generator configuration, and drift-validation command selected by ADR 0006.
-- [ ] Integrate the pinned Atlas migration container/configuration and create the bootstrap command entrypoint.
-- [ ] Scaffold `apps/web` with strict TypeScript, linting, typecheck, and tests.
-- [ ] Add shared Makefile/task scripts without hiding required commands.
-- [ ] Add formatting, lint, unit-test, build, secret-scan, and dependency-scan CI.
-- [ ] Add pinned multi-stage Dockerfiles running as non-root.
-- [ ] Add typed configuration loading with `*_FILE` secret support and validation.
-- [ ] Keep `.env.example` synchronized with implemented settings.
+- [x] Initialize the Go module and root workspace/tooling files.
+- [x] Create `apps/gateway`, `apps/control-plane`, and `apps/worker` entrypoints.
+- [x] Create the authoritative `/api/control/v1` OpenAPI 3.0.3 source-contract skeleton, pinned generator configuration, and drift-validation command selected by ADR 0006.
+- [x] Integrate the pinned Atlas migration container/configuration and create a compileable bootstrap CLI boundary with help/version output only; it performs no identity mutation and does not read bootstrap secrets. Functional owner bootstrap remains Phase 4.
+- [x] Scaffold `apps/web` with strict TypeScript, linting, typecheck, and tests.
+- [x] Add shared Makefile/task scripts without hiding required commands.
+- [x] Add formatting, lint, unit-test, build, secret-scan, and dependency-scan CI.
+- [x] Add pinned multi-stage Dockerfiles running as non-root.
+- [x] Add typed configuration loading with `*_FILE` secret support and validation.
+- [x] Keep `.env.example` synchronized with implemented settings.
 
 ## Phase 2: Core Docker Compose and Operations
 
-- [ ] Create the generic core Compose profile: Traefik, web, gateway, control-plane, worker, migrate, PostgreSQL, and Redis.
+- [ ] Create the generic core Compose profile: Traefik, web, gateway, control-plane, worker, migrate, PostgreSQL, and Redis, including trusted empty-volume PostgreSQL init assets that create the five fixed `LOGIN` principals, closed five-role `NOLOGIN` graph, required ownership/memberships, and database/schema bootstrap grants before Atlas runs.
 - [ ] Make the core profile work on localhost without Cloudflare, Tailscale, or provider credentials.
-- [ ] Document and automate generation of development secret files with correct formats and permissions without committing secret values.
-- [ ] Add a documented first-run flow covering `.env` creation, secret setup, migrations, owner bootstrap, startup, health checks, and shutdown.
+- [ ] Document and automate generation of development secret files with correct formats and permissions, distinct database-secret paths and values, and no committed or logged secret values.
+- [ ] Add a Phase 2 first-run flow covering `.env` creation, secret setup, PostgreSQL initialization, migrations, startup, health checks, and shutdown; explicitly state that owner bootstrap is unavailable until Phase 4.
 - [ ] Add health checks, dependency readiness, restart policies, resource limits, and graceful shutdown.
 - [ ] Add protected secret mounts and named PostgreSQL/Traefik state volumes.
 - [ ] Add optional Cloudflare Tunnel profile driven by `PUBLIC_API_BASE_URL`.
 - [ ] Validate Tailscale/CoreDNS profile feasibility on macOS/Docker Desktop or approve and document a host-Tailscale alternative; update ADR 0002 to Accepted before implementation.
 - [ ] Add the accepted optional private-admin profile driven by `ADMIN_BASE_URL` and private subnet settings.
 - [ ] Add structured redacted logging, Prometheus metrics, and optional OpenTelemetry setup.
-- [ ] Add backup, restore, key-ring recovery, and upgrade runbooks.
+- [ ] Add backup, restore, key-ring recovery, and upgrade runbooks, including exact `pg_auth_members` edge-option and `pg_roles` attribute verification plus the audited pre-Atlas cluster-admin procedure for exceptional graph upgrades.
 
 ## Phase 3: PostgreSQL, RLS, and Outbox
 
 - [ ] Implement UUIDv7 generation and common time/version conventions.
 - [ ] Implement initial schema with organization-aware keys, indexes, and constraints.
-- [ ] Create application, authentication, maintenance, and migration database roles.
+- [ ] Use the pre-provisioned closed PostgreSQL role graph in Phase 3 migrations: explicitly set the correct owner role, grant least-privilege access to existing runtime roles, and test exact `pg_auth_members` ADMIN/INHERIT/SET options plus `pg_roles` LOGIN/SUPERUSER/BYPASSRLS/CREATEROLE/INHERIT attributes.
 - [ ] Enable and force RLS on every tenant table.
 - [ ] Implement transaction-local organization/actor context.
 - [ ] Generate typed queries with `sqlc` and use `pgx` pools per process.
@@ -65,7 +65,7 @@ Completion requires an automated clean-clone installation test in a fresh enviro
 
 ## Phase 4: Identity, Organizations, and RBAC
 
-- [ ] Implement one-time owner/organization bootstrap.
+- [ ] Implement and document one-time owner/organization bootstrap through the control-plane login and a narrowly scoped database operation; hash plaintext with application Argon2id before the database boundary, and do not use cluster-admin or migration credentials.
 - [ ] Define the authentication, session, organization, membership, role, permission, and bootstrap OpenAPI paths/schemas before implementing their HTTP handlers.
 - [ ] Implement Argon2id password hashing and rehash-on-login behavior.
 - [ ] Implement login throttling with generic failure responses and mandatory failed-login security audit events.

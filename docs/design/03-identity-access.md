@@ -308,12 +308,16 @@ Additional organization creation is not a tenant permission in V1. An explicit d
 
 ## Initial Owner Bootstrap
 
-The deployment starts uninitialized when no organizations exist. A one-time bootstrap command in the Go image:
+The deployment starts uninitialized when no organizations exist. Phase 1 provides only a compileable `nexusrelay-bootstrap` CLI boundary with help and version output. That scaffold performs no identity mutation and does not read bootstrap identity/password secrets. Functional owner bootstrap is Phase 4.
 
-1. Requires owner email, display name, organization name, organization slug, and password through protected input or secret files.
+The Phase 4 one-time bootstrap command runs with the control-plane PostgreSQL login, not the cluster-admin or migration login. The CLI reads the protected plaintext password, validates password policy, and computes the encoded application Argon2id hash before invoking the database. Plaintext never enters a SQL parameter, transaction, function, audit record, or database log. The CLI invokes a narrowly scoped one-time database operation owned by `nexusrelay_security_definer_owner` and granted only to `nexusrelay_control_plane_runtime`. The operation:
+
+1. Requires owner email, display name, organization name, organization slug, and password through protected input or a secret file; only the resulting encoded Argon2id hash crosses the database boundary.
 2. Acquires a deployment bootstrap advisory lock and refuses to run when a singleton initialization record or any organization already exists unless an explicit reviewed recovery procedure is invoked.
 3. Creates user, organization, seeded roles, role permissions, owner membership, and an audit event in one transaction.
-4. Does not print the password or password hash.
+4. Does not print the password or encoded hash.
+
+The control-plane login receives only `EXECUTE` on this bounded operation and the runtime privileges otherwise required by the control plane. It does not receive schema ownership, migration authority, cluster administration, or a general tenant/RLS bypass. This preserves one transactional bootstrap while avoiding distribution of initialization or migration credentials to the bootstrap process.
 
 An optional web setup flow may later wrap the same service, but must be protected by a one-time deployment token and disabled permanently after initialization.
 

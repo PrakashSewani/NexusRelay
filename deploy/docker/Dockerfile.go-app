@@ -1,0 +1,52 @@
+# syntax=docker.io/docker/dockerfile:1.7.1@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
+
+FROM golang:1.25.12-bookworm@sha256:ea341baa9bd5ba6784f6d7161ace70544349a6242d54d34a0fbfd2c4d51c9d58 AS build
+
+ARG VERSION
+ARG REVISION
+ARG SOURCE_DATE_EPOCH
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+
+COPY apps ./apps
+COPY internal ./internal
+
+ENV CGO_ENABLED=0 \
+    GOFLAGS=-mod=readonly
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    case "${VERSION}" in ""|*[!A-Za-z0-9._+-]*) echo "VERSION must match [A-Za-z0-9._+-]+" >&2; exit 1;; esac && \
+    case "${REVISION}" in [A-Za-z0-9]*);; *) echo "REVISION must start with an ASCII letter or number" >&2; exit 1;; esac && \
+    case "${REVISION}" in *[!A-Za-z0-9._-]*) echo "REVISION must match [A-Za-z0-9][A-Za-z0-9._-]{0,127}" >&2; exit 1;; esac && \
+    test "${#REVISION}" -le 128 || { echo "REVISION must be at most 128 characters" >&2; exit 1; } && \
+    case "${SOURCE_DATE_EPOCH}" in ""|*[!0-9]*) echo "SOURCE_DATE_EPOCH must be a non-empty Unix timestamp" >&2; exit 1;; esac && \
+    linker_flags="-s -w -buildid= -X github.com/PrakashSewani/NexusRelay/internal/buildinfo.Version=${VERSION} -X github.com/PrakashSewani/NexusRelay/internal/buildinfo.Revision=${REVISION}" && \
+    go build -trimpath -buildvcs=false -ldflags="${linker_flags}" -o /out/nexusrelay-gateway ./apps/gateway && \
+    go build -trimpath -buildvcs=false -ldflags="${linker_flags}" -o /out/nexusrelay-control-plane ./apps/control-plane && \
+    go build -trimpath -buildvcs=false -ldflags="${linker_flags}" -o /out/nexusrelay-worker ./apps/worker && \
+    go build -trimpath -buildvcs=false -ldflags="${linker_flags}" -o /out/nexusrelay-bootstrap ./apps/bootstrap && \
+    touch --date="@${SOURCE_DATE_EPOCH}" /out/nexusrelay-*
+
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:f7f8f729987ad0fdf6b05eeeae94b26e6a0f613bdf46feea7fc40f7bd72953e6
+
+ARG VERSION
+ARG REVISION
+
+LABEL org.opencontainers.image.title="NexusRelay applications" \
+      org.opencontainers.image.description="Gateway, control-plane, worker, and bootstrap binaries for NexusRelay" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${REVISION}" \
+      org.opencontainers.image.source="https://github.com/PrakashSewani/NexusRelay"
+
+COPY --from=build --chown=65532:65532 /out/ /usr/local/bin/
+
+USER 65532:65532
+EXPOSE 8080
+
+# Compose replaces this exec-form command with another absolute binary path.
+CMD ["/usr/local/bin/nexusrelay-gateway"]

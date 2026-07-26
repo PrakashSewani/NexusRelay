@@ -1,0 +1,184 @@
+# This file is a focused application-image/shared-configuration foundation.
+# It intentionally omits the Phase 2 PostgreSQL, Redis, Traefik, networking,
+# secrets, and complete runtime configuration required for a runnable core
+# deployment. With no profile selected, Compose starts no services. Enable only
+# the profile needed for image/configuration testing.
+
+x-build-args: &build-args
+  VERSION: ${NEXUSRELAY_VERSION:-0.0.0-dev}
+  REVISION: ${NEXUSRELAY_REVISION:-local}
+  SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH:-0}
+
+x-go-application: &go-application
+  image: nexusrelay-app:${NEXUSRELAY_IMAGE_TAG:-dev}
+  build:
+    context: ..
+    dockerfile: deploy/docker/Dockerfile.go-app
+    args: *build-args
+  user: "65532:65532"
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=16m
+  volumes:
+    - type: volume
+      source: shared-config
+      target: /etc/nexusrelay/shared
+      read_only: true
+  depends_on:
+    shared-config-init:
+      condition: service_completed_successfully
+
+services:
+  # The project-scoped named volume starts root-owned, so this constrained
+  # one-shot publisher is the sole root process and sole writer. It publishes
+  # immutable releases/<revision> directories, then atomically replaces the
+  # current symlink. Application containers remain non-root and mount the volume
+  # read-only; their stable asset path is /etc/nexusrelay/shared/current.
+  shared-config-init:
+    profiles: [foundation, bootstrap]
+    image: busybox:1.37.0-uclibc@sha256:39e0df8c4d65953b55c344f017e1ff2e0031a7454b3c24e6b76d402f207e315a
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      RELEASE_REVISION: ${NEXUSRELAY_REVISION:-local}
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        revision="$${RELEASE_REVISION}"
+        case "$${revision}" in
+          ""|*[!A-Za-z0-9._-]*)
+            echo "NEXUSRELAY_REVISION must match [A-Za-z0-9][A-Za-z0-9._-]{0,127}" >&2
+            exit 1
+            ;;
+          [A-Za-z0-9]*) ;;
+          *)
+            echo "NEXUSRELAY_REVISION must start with an ASCII letter or number" >&2
+            exit 1
+            ;;
+        esac
+        if [ "$${#revision}" -gt 128 ]; then
+          echo "NEXUSRELAY_REVISION must be at most 128 characters" >&2
+          exit 1
+        fi
+
+        mkdir -p /target/releases
+        exec 9>/target/.publish.lock
+        flock -x 9
+
+        candidate="$(mktemp -d "/target/releases/.$${revision}.XXXXXX")"
+        cleanup() {
+          if [ -n "$${candidate}" ] && [ -d "$${candidate}" ]; then
+            chmod -R u+w "$${candidate}"
+            rm -rf "$${candidate}"
+          fi
+        }
+        trap cleanup EXIT
+
+        # Explicit allowlist: hidden or unrelated files under deploy/shared are
+        # never mounted into this publisher and therefore cannot be copied.
+        cp /source/README.md "$${candidate}/README.md"
+        chmod 0444 "$${candidate}/README.md"
+        digest="$(sha256sum "$${candidate}/README.md" | cut -d ' ' -f 1)"
+        printf '%s  README.md\n' "$${digest}" >"$${candidate}/MANIFEST.sha256"
+        chmod 0444 "$${candidate}/MANIFEST.sha256"
+        chmod 0555 "$${candidate}"
+
+        release="/target/releases/$${revision}"
+        if [ -e "$${release}" ] || [ -L "$${release}" ]; then
+          if [ ! -d "$${release}" ] || [ -L "$${release}" ]; then
+            echo "existing release $${revision} is not an immutable directory" >&2
+            exit 1
+          fi
+          if [ "$(find "$${release}" -mindepth 1 -maxdepth 1 | wc -l)" -ne 2 ] ||
+             [ ! -f "$${release}/README.md" ] || [ -L "$${release}/README.md" ] ||
+             [ ! -f "$${release}/MANIFEST.sha256" ] || [ -L "$${release}/MANIFEST.sha256" ] ||
+             ! cmp -s "$${candidate}/README.md" "$${release}/README.md" ||
+             ! cmp -s "$${candidate}/MANIFEST.sha256" "$${release}/MANIFEST.sha256"; then
+            echo "existing release $${revision} differs from the allowlisted payload" >&2
+            exit 1
+          fi
+        else
+          chmod 0755 "$${candidate}"
+          mv "$${candidate}" "$${release}"
+          chmod 0555 "$${release}"
+          candidate=""
+        fi
+
+        next_link="/target/.current.$$$$"
+        rm -f "$${next_link}"
+        ln -s "releases/$${revision}" "$${next_link}"
+        mv -Tf "$${next_link}" /target/current
+    volumes:
+      - type: bind
+        source: ./shared/README.md
+        target: /source/README.md
+        read_only: true
+      - type: volume
+        source: shared-config
+        target: /target
+    restart: "no"
+
+  gateway:
+    <<: *go-application
+    profiles: [foundation]
+    command: ["/usr/local/bin/nexusrelay-gateway"]
+
+  control-plane:
+    <<: *go-application
+    profiles: [foundation]
+    command: ["/usr/local/bin/nexusrelay-control-plane"]
+
+  worker:
+    <<: *go-application
+    profiles: [foundation]
+    command: ["/usr/local/bin/nexusrelay-worker"]
+
+  # Phase 4 owner bootstrap is not implemented. This opt-in service can only
+  # display the current scaffold help and never starts with another profile.
+  bootstrap:
+    <<: *go-application
+    profiles: [bootstrap]
+    command: ["/usr/local/bin/nexusrelay-bootstrap", "--help"]
+
+  # Web remains a separate image and is opt-in because its complete runtime
+  # topology is outside this foundation.
+  web:
+    profiles: [web]
+    image: nexusrelay-web:${NEXUSRELAY_IMAGE_TAG:-dev}
+    build:
+      context: ..
+      dockerfile: deploy/docker/Dockerfile.web
+      args: *build-args
+    user: "65532:65532"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+
+  # Migrations keep their independently pinned Atlas image. PostgreSQL and its
+  # required migration secret/configuration are intentionally not defined here.
+  migrate:
+    profiles: [migration]
+    image: nexusrelay-migrate:${NEXUSRELAY_IMAGE_TAG:-dev}
+    build:
+      context: ..
+      dockerfile: deploy/migrate/Dockerfile
+      args:
+        VERSION: ${NEXUSRELAY_VERSION:-0.0.0-dev}
+        REVISION: ${NEXUSRELAY_REVISION:-local}
+
+volumes:
+  shared-config:

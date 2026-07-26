@@ -1,0 +1,50 @@
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+/.envrc
+/.npmrc
+*.pem
+*.key
+/secrets/
+/.secrets/
+/.local-secrets/
+*.local.secret
+
+# Go
+/bin/
+*.test
+*.out
+/vendor/
+
+# Node.js
+node_modules/
+.pnpm-store/
+.next/
+coverage/
+dist/
+
+# CI security artifacts
+/govulncheck-*.json
+/osv-*.json
+/*-vulnerabilities.json
+/*.cdx.json
+/app.tar
+/web.tar
+/migrate.tar
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~

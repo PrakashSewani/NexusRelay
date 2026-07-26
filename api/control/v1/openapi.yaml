@@ -1,0 +1,11 @@
+openapi: 3.0.3
+info:
+  title: NexusRelay Control Plane API
+  version: 1.0.0
+  description: >-
+    Authoritative transport contract for the versioned NexusRelay administrative
+    API. Administrative operations are added only with their implementing phase.
+servers:
+  - url: /api/control/v1
+    description: Same-origin control-plane base path
+paths: {}

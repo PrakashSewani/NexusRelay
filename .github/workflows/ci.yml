@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  go:
+    name: Go
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Set up Go
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            tests/compat/openai-sdk/go/go.sum
+      - name: Check formatting
+        run: make go-fmt-check sdk-go-fmt-check
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.12.2
+      - name: Test
+        run: make go-test go-race
+      - name: Vet
+        run: make go-vet
+      - name: Build
+        run: make go-build
+
+  web:
+    name: Web
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24.18.0
+      - name: Enable pinned pnpm
+        run: corepack enable
+      - name: Install dependencies
+        run: make web-install
+      - name: Lint and typecheck
+        run: make web-lint web-typecheck
+      - name: Test and build
+        run: make web-test web-build
+
+  consistency:
+    name: Contracts, migrations, and SDK replays
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      VERSION: ci
+      REVISION: ${{ github.sha }}
+      IMAGE_TAG: ci
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Set up Go
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            tests/compat/openai-sdk/go/go.sum
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24.18.0
+      - name: Enable pinned pnpm
+        run: corepack enable
+      - name: Install contract dependencies
+        run: make api-install
+      - name: Validate contract and generated files
+        run: make api-test api-drift
+      - name: Validate fixtures and authored scripts
+        run: make fixtures-validate shell-syntax-check python-syntax-check javascript-syntax-check whitespace-check
+      - name: Verify Atlas migration hash
+        run: |
+          make atlas-hash
+          git diff --exit-code -- migrations/atlas.sum
+      - name: Validate Atlas migrations
+        run: make atlas-validate atlas-validate-semantic atlas-test
+      - name: Replay JavaScript SDK fixtures
+        run: make sdk-replay-js
+      - name: Replay Go SDK fixtures
+        run: make sdk-replay-go
+      - name: Replay Python SDK fixtures
+        run: make sdk-replay-python

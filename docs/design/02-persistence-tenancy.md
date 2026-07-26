@@ -11,6 +11,7 @@ PostgreSQL is authoritative for identities, tenant configuration, policy, reques
 - Handwritten dynamic SQL is limited to cases that cannot be represented cleanly through generated queries and receives the same tenant and parameterization review.
 - Domain services own transaction boundaries; repositories do not begin hidden transactions.
 - Database errors are mapped into domain categories while preserving wrapped PostgreSQL causes for internal handling.
+- Gateway, control-plane, and worker use the fixed `nexusrelay_gateway`, `nexusrelay_control_plane`, and `nexusrelay_worker` PostgreSQL `LOGIN` principals with distinct password files. Atlas uses the fixed `nexusrelay_migration` login. `nexusrelay_cluster_admin` is initialization, exceptional audited provisioning, and recovery only; it is never supplied to Atlas or a long-running application process.
 
 ## Identifier Strategy
 
@@ -55,15 +56,36 @@ Tenant tables enable and force row-level security for application roles. Policie
 
 `organizations` is the tenant root and does not duplicate its ID in an `organization_id` column. Its forced RLS policy compares `organizations.id` with the transaction-local organization setting. Listing organizations for a user is performed through restricted membership resolution, never an unscoped organization-table query.
 
-Separate narrowly privileged database roles exist for:
+The V1 database role graph is closed and separates credential-bearing principals from capability-bearing roles:
 
-- Migrations and schema administration.
-- Application tenant operations subject to RLS.
-- Approved global identity authentication queries.
-- Maintenance operations that iterate organizations and establish each tenant context before mutation.
-- A narrowly scoped identity-administration function/role for deployment-operator user disablement. It may inspect owner memberships, lock affected organizations in deterministic order, enforce the final-owner invariant, and insert per-organization audit/outbox records, but cannot read arbitrary tenant resources.
+| Principal or role | `rolcanlogin` | `rolsuper` | `rolbypassrls` | `rolcreaterole` | `rolinherit` | V1 outcome |
+| --- | --- | --- | --- | --- | --- | --- |
+| `nexusrelay_cluster_admin` | `true` | `true` | `true` | `true` | `true` | Official-image bootstrap superuser; trusted empty-volume initialization, explicit audited role-graph upgrade, and reviewed recovery only |
+| `nexusrelay_migration` | `true` | `false` | `false` | `false` | `false` | Owns the Atlas revision table directly |
+| `nexusrelay_gateway` | `true` | `false` | `false` | `false` | `true` | Member only of `nexusrelay_gateway_runtime` through the exact edge below |
+| `nexusrelay_control_plane` | `true` | `false` | `false` | `false` | `true` | Member only of `nexusrelay_control_plane_runtime` through the exact edge below |
+| `nexusrelay_worker` | `true` | `false` | `false` | `false` | `true` | Member only of `nexusrelay_worker_runtime` through the exact edge below |
+| `nexusrelay_schema_owner` | `false` | `false` | `false` | `false` | `false` | Owns application schemas, tables, types, and policies |
+| `nexusrelay_security_definer_owner` | `false` | `false` | `false` | `false` | `false` | Owns all `SECURITY DEFINER` functions and has no runtime membership |
+| `nexusrelay_gateway_runtime` | `false` | `false` | `false` | `false` | `false` | Receives only gateway object/function privileges and owns no SQL objects |
+| `nexusrelay_control_plane_runtime` | `false` | `false` | `false` | `false` | `false` | Receives only control-plane object/function privileges and owns no SQL objects |
+| `nexusrelay_worker_runtime` | `false` | `false` | `false` | `false` | `false` | Receives only worker object/function privileges and owns no SQL objects |
 
-Application services never use the migration owner role.
+PostgreSQL 18 stores authorization behavior on each membership edge. Initialization creates exactly these edges:
+
+| Member LOGIN -> granted role | `admin_option` | `inherit_option` | `set_option` | Effect |
+| --- | --- | --- | --- | --- |
+| `nexusrelay_migration -> nexusrelay_schema_owner` | `false` | `false` | `true` | Migration must explicitly `SET ROLE`; it cannot administer the owner role |
+| `nexusrelay_migration -> nexusrelay_security_definer_owner` | `false` | `false` | `true` | Migration must explicitly `SET ROLE`; it cannot administer the owner role |
+| `nexusrelay_gateway -> nexusrelay_gateway_runtime` | `false` | `true` | `false` | Gateway inherits privileges but cannot `SET ROLE` or administer membership |
+| `nexusrelay_control_plane -> nexusrelay_control_plane_runtime` | `false` | `true` | `false` | Control plane inherits privileges but cannot `SET ROLE` or administer membership |
+| `nexusrelay_worker -> nexusrelay_worker_runtime` | `false` | `true` | `false` | Worker inherits privileges but cannot `SET ROLE` or administer membership |
+
+Trusted empty-volume initialization creates all five logins and all five foundational roles before Atlas. It is the sole process allowed to receive all database password files, and secret-generation/init tooling validates that their paths and values are distinct without logging values. Initialization creates the application database, revokes unsafe `PUBLIC` schema creation, grants the migration login only the connection, temporary-object, and schema-bootstrap authority needed for Atlas, and creates or transfers the application schema as needed for first migration. Password literals never appear in migrations or committed SQL.
+
+Reviewed migrations explicitly `SET ROLE` to the appropriate owner role. They create schema objects and grant object/function privileges to the three existing runtime roles; they do not create or alter roles. Exact PostgreSQL 18 grant syntax remains subject to implementation tests, but the ownership and edge-option outcomes above are exact. Role-level `INHERIT`/`NOINHERIT` only supplies the default `inherit_option` when a new membership omits it; it does not control an already explicit incoming edge. The foundational `NOLOGIN` roles are `NOINHERIT` as a defensive default for the closed graph, not as the mechanism by which runtime inheritance is denied or allowed. Application services never use either owner role, cannot `SET ROLE` into their runtime group identity, cannot create roles, cannot apply migrations, and cannot inherit another service's runtime role.
+
+No arbitrary future role creation is required for V1. A role-graph change is an exceptional deployment upgrade executed before Atlas by an explicit audited cluster-admin provisioning command/runbook. Normal migrations must fail rather than hide such a graph change. Narrow global authentication, maintenance, queue-claim, identity-administration, and similar capabilities are expressed through object privileges and bounded functions granted to the applicable existing runtime role, not through additional roles.
 
 ### Pre-Tenant Lookup Functions
 
@@ -77,7 +99,7 @@ The application roles have no direct unscoped `SELECT` privilege on `users`, `se
 | Organization selection/list | authenticated user/session ID | a bounded page of that user's membership and organization descriptors only |
 | Own-session list | authenticated current session/user ID plus validated cursor/page size | a bounded page of that user's global session metadata only; no token hashes, other users, or tenant permissions |
 
-Each function is owned by a dedicated `NOLOGIN` role, declared `SECURITY DEFINER`, uses a fixed `search_path` containing only `pg_catalog` plus the private application schema, schema-qualifies referenced objects, and accepts typed parameters rather than dynamic SQL. Creation migrations revoke `ALL` from `PUBLIC` and application roles, then grant only `EXECUTE` on each function to the specific login/authentication role that needs it. Functions return named composite types or table columns with a reviewed bounded shape, never arbitrary rows, secrets unrelated to the operation, tenant configuration, or model content. The API-key candidate bound is enforced by uniqueness or a hard function limit and treated as corruption if exceeded.
+Each function is owned by `nexusrelay_security_definer_owner`, declared `SECURITY DEFINER`, uses a fixed `search_path` containing only `pg_catalog` plus the private application schema, schema-qualifies referenced objects, and accepts typed parameters rather than dynamic SQL. Creation migrations revoke `ALL` from `PUBLIC` and runtime roles, then grant only `EXECUTE` on each function to the specific existing runtime role that needs it. Functions return named composite types or table columns with a reviewed bounded shape, never arbitrary rows, secrets unrelated to the operation, tenant configuration, or model content. The API-key candidate bound is enforced by uniqueness or a hard function limit and treated as corruption if exceeded.
 
 The closed inventory of mixed-scope mutation functions is separate from the read inventory:
 
@@ -88,7 +110,7 @@ The closed inventory of mixed-scope mutation functions is separate from the read
 | Global failed-login audit append | authentication role | bounded keyed identifier hash, normalized network metadata, outcome code, and correlation ID; inserts one restricted global security event and returns no identity or tenant data |
 | Own-session revoke/logout | authenticated identity role | current user ID, target session ID, expected session version, reason, and correlation metadata; revokes exactly one session owned by that user, writes its global security audit event, and cannot affect another user's session |
 
-Mixed-scope mutation functions are owned by dedicated `NOLOGIN` roles, use the same fixed-`search_path`, schema qualification, typed-input, `PUBLIC` revocation, and per-function `EXECUTE` rules as read functions. Their transaction and disclosure behavior is not broadened through a generic global-user or audit function. Function ownership cannot be held by a service login, the migration role is not used at runtime, and callers cannot alter the effective `search_path`. Migration and integration tests inspect `pg_proc`, ownership, ACLs, volatility/security flags, and result shapes/effects; prove direct table access is denied; exercise malicious inputs; and prove no function crosses user or organization scope. Any new pre-tenant or mixed-scope purpose requires design review and an explicit function, grant, bound, and negative test rather than broadening an existing function.
+Mixed-scope mutation functions are also owned by `nexusrelay_security_definer_owner` and use the same fixed-`search_path`, schema qualification, typed-input, `PUBLIC` revocation, and per-function runtime-role `EXECUTE` rules as read functions. Their transaction and disclosure behavior is not broadened through a generic global-user or audit function. Function ownership cannot be held by a service login, the migration login is not used at runtime, and callers cannot alter the effective `search_path`. Migration and integration tests inspect `pg_proc`, ownership, ACLs, volatility/security flags, and result shapes/effects; prove direct table access is denied; exercise malicious inputs; and prove no function crosses user or organization scope. Any new pre-tenant or mixed-scope purpose requires design review and an explicit function, grant, bound, and negative test rather than broadening an existing function or adding a role.
 
 ### Global Tables
 
@@ -255,18 +277,21 @@ Mutable resources expose a `version`. Control-plane reads return a strong ETag d
 - The committed `atlas.sum` protects migration-directory integrity. CI validates it and fails on generated-file drift.
 - Atlas obtains a PostgreSQL advisory lock to prevent concurrent application; lock or validation failure blocks application startup.
 - The Atlas revision table records version/description, integrity hash, execution timestamp and duration, statement progress, and failure metadata.
+- The Atlas revision table is owned directly by `nexusrelay_migration`; application schemas, tables, types, and policies are owned by `nexusrelay_schema_owner`, and all `SECURITY DEFINER` functions are owned by `nexusrelay_security_definer_owner`.
 - Already-applied migration files are immutable. Repairs use new forward migrations; normal deployment never rewrites revision history or runs down migrations.
 - Migrations use one transaction per file by default. PostgreSQL-required non-transactional operations need explicit review plus documented partial-failure and retry behavior.
 - Normal deployment preserves linear execution and never uses Atlas dirty-database, baseline, non-linear, or skip-lock overrides.
 - Rolling changes use expand-and-contract: add nullable/new structures, deploy compatible code, backfill, enforce constraints, then remove old structures in a later release.
 - Large backfills are resumable worker operations rather than long blocking migration transactions.
 - CI tests migration from an empty database and from the previous supported release schema, checksum tampering, lock contention, transactional rollback, and reviewed non-transactional recovery.
+- Atlas connects only as `nexusrelay_migration`, a non-superuser, `NOBYPASSRLS`, `NOCREATEROLE` login whose password file and value are distinct from cluster-admin and runtime secrets. Empty-volume principal/role provisioning precedes Atlas and is Phase 2 deployment initialization, not a schema migration.
+- Phase 3 migrations use the pre-provisioned closed graph and grant privileges to existing runtime roles. Initialization and integration tests query `pg_auth_members` and assert exact `admin_option`, `inherit_option`, and `set_option` values for all five edges. They query `pg_roles` and assert the documented `rolcanlogin`, `rolsuper`, `rolbypassrls`, `rolcreaterole`, and `rolinherit` attributes, explicit owner-role use, and denial of cross-process capabilities.
 
 ## Backup and Recovery
 
 - PostgreSQL backup is the authoritative recovery mechanism.
 - Redis is reconstructed after loss; counters may require a documented conservative policy during recovery.
-- Restore testing verifies schema, encrypted credential readability with the retained master key, RLS behavior, outbox resumption, and no duplicate aggregate effects.
+- Restore testing verifies schema, the exact closed login/role graph, every `pg_auth_members` edge option, the documented `pg_roles` attributes, ownership outcomes, encrypted credential readability with the retained master key, RLS behavior, outbox resumption, and no duplicate aggregate effects.
 - Encryption master keys are backed up separately from database backups.
 
 ## Failure Handling

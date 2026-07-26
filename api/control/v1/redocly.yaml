@@ -1,0 +1,52 @@
+apis:
+  control@v1:
+    root: ./openapi.yaml
+    x-openapi-ts:
+      output: ../../../apps/web/src/generated/control-plane/schema.d.ts
+extends:
+  - minimal
+rules:
+  component-name-unique: error
+  info-license: off
+  no-ambiguous-paths: error
+  no-empty-servers: error
+  no-identical-paths: error
+  no-invalid-media-type-examples: error
+  no-invalid-parameter-examples: error
+  no-invalid-schema-examples: error
+  no-path-trailing-slash: error
+  no-server-example.com: error
+  no-server-trailing-slash: error
+  no-unresolved-refs: error
+  operation-2xx-response: error
+  operation-4xx-response: error
+  operation-operationId: error
+  operation-operationId-unique: error
+  operation-operationId-url-safe: error
+  operation-parameters-unique: error
+  path-declaration-must-exist: error
+  path-not-include-query: error
+  path-parameters-defined: error
+  request-mime-type:
+    severity: error
+    allowedValues:
+      - application/json
+  response-mime-type:
+    severity: error
+    allowedValues:
+      - application/json
+  response-contains-header:
+    severity: error
+    names:
+      1XX:
+        - x-request-id
+      2XX:
+        - x-request-id
+      3XX:
+        - x-request-id
+      4XX:
+        - x-request-id
+      5XX:
+        - x-request-id
+  security-defined: error
+  spec-strict-refs: error

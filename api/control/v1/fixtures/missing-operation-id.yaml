@@ -1,0 +1,28 @@
+openapi: 3.0.3
+info:
+  title: Missing operationId lint fixture
+  version: 0.0.0
+servers:
+  - url: /api/control/v1
+security: []
+paths:
+  /fixture:
+    get:
+      summary: Verify missing operationId lint failure
+      responses:
+        '204':
+          description: Fixture response
+          headers:
+            x-request-id:
+              description: Fixture request identifier
+              required: true
+              schema:
+                type: string
+        '400':
+          description: Fixture error
+          headers:
+            x-request-id:
+              description: Fixture request identifier
+              required: true
+              schema:
+                type: string

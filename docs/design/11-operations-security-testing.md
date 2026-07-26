@@ -79,11 +79,20 @@ Business configuration such as providers, models, routing, budgets, and roles li
 The root `.env.example` is the complete V1 deployment-setting inventory. Its header defines default, optional, conditional, secret-file, and command-only semantics. The following list is illustrative rather than exhaustive; implementations must define typed fields for every inventory entry and must not accept undocumented settings silently:
 
 ```text
+POSTGRES_DB
 DATABASE_HOST
 DATABASE_PORT
 DATABASE_NAME
-DATABASE_USER
-DATABASE_PASSWORD_FILE
+POSTGRES_USER
+POSTGRES_PASSWORD_FILE
+DATABASE_MIGRATION_USER
+DATABASE_MIGRATION_PASSWORD_FILE
+DATABASE_GATEWAY_USER
+DATABASE_GATEWAY_PASSWORD_FILE
+DATABASE_CONTROL_PLANE_USER
+DATABASE_CONTROL_PLANE_PASSWORD_FILE
+DATABASE_WORKER_USER
+DATABASE_WORKER_PASSWORD_FILE
 DATABASE_SSLMODE
 DATABASE_MIN_CONNECTIONS_*
 DATABASE_MAX_CONNECTIONS_*
@@ -143,13 +152,16 @@ PRIVATE_DNS_IP
 
 Startup validation checks URL schemes, timeout relationships, secret lengths/formats, origin policy, schema compatibility, and required files. Errors name the setting but never print secret values.
 
+The PostgreSQL principal-name settings are transport/configuration inputs for official images, not operator-configurable role semantics. Validation requires exactly `POSTGRES_USER=nexusrelay_cluster_admin`, `DATABASE_MIGRATION_USER=nexusrelay_migration`, `DATABASE_GATEWAY_USER=nexusrelay_gateway`, `DATABASE_CONTROL_PLANE_USER=nexusrelay_control_plane`, and `DATABASE_WORKER_USER=nexusrelay_worker`. Core validation also requires `POSTGRES_DB == DATABASE_NAME`; a mismatch or renamed principal fails before initialization or process startup.
+
 Forced RLS is not runtime-configurable in production. Test tooling may use a separate privileged database role only for migration/setup assertions; application roles always operate with forced RLS.
 
 ### Secret File Contracts
 
 All `*_FILE` values point to regular read-only files. Parsers remove at most one trailing LF or CRLF, reject other leading/trailing whitespace where the format does not permit it, reject empty files, enforce the maximum below, and never log file contents. Direct secret environment values are not supported in V1; development uses mounted local secret files too.
 
-- `POSTGRES_PASSWORD_FILE` and `DATABASE_PASSWORD_FILE`: UTF-8 password bytes after one trailing newline is removed. The core Compose profile points both settings to the same Docker secret so PostgreSQL initialization and application authentication cannot diverge.
+- `POSTGRES_PASSWORD_FILE`: UTF-8 password for `POSTGRES_USER=nexusrelay_cluster_admin` after one trailing newline is removed. Outside trusted PostgreSQL initialization, explicit audited role-graph provisioning, and reviewed recovery, it is not mounted into Atlas or an application container.
+- `DATABASE_MIGRATION_PASSWORD_FILE`, `DATABASE_GATEWAY_PASSWORD_FILE`, `DATABASE_CONTROL_PLANE_PASSWORD_FILE`, and `DATABASE_WORKER_PASSWORD_FILE`: UTF-8 passwords after one trailing newline is removed. Every setting names a distinct file and secret value. Trusted empty-volume PostgreSQL initialization is the sole process that receives all five database password files so it can create the fixed logins. Atlas and each runtime process receive only their own file. Secret-generation/init tooling validates distinct paths and values without logging, serializing, or comparing them in observable output.
 - `REDIS_URL_FILE`: one absolute `redis://` or `rediss://` URI with credentials percent-encoded as required; maximum 4 KiB.
 - `MASTER_KEYRING_FILE`: versioned JSON key ring with `expected_epoch` defined in `04-providers-secrets.md`; maximum 64 KiB; file permissions must prevent group/world read.
 - `API_KEY_PEPPER_RING_FILE`: UTF-8 JSON with the exact V1 shape below; maximum 64 KiB. `version` must be `1`; `active_key_id` must name exactly one entry; entries not active are verify-only. `key_id` matches `[A-Za-z0-9][A-Za-z0-9._-]{0,63}` and each `key` is canonical padded base64 for exactly 32 decoded bytes. Invalid UTF-8, unknown/duplicate fields, trailing JSON values, and duplicate key IDs are rejected. Existing hashes retain their `pepper_key_id`; old peppers are removed only after no hashes reference them or all affected keys are intentionally revoked.
@@ -172,12 +184,12 @@ All `*_FILE` values point to regular read-only files. Parsers remove at most one
 
 Conditional startup requirements:
 
-- Gateway, control-plane, and worker require PostgreSQL, Redis, and the secret files they consume; migrate requires PostgreSQL but not provider/session/API-key cryptographic files.
+- Gateway, control-plane, and worker require PostgreSQL, Redis, their own database password file, and the other secret files they consume. Migrate requires only shared non-secret PostgreSQL connection settings plus `DATABASE_MIGRATION_USER` and `DATABASE_MIGRATION_PASSWORD_FILE`; it does not receive cluster-admin, runtime, provider, session, CSRF, or API-key cryptographic secrets.
 - Control-plane requires session and CSRF secrets plus the provider master and API-key pepper rings for synchronous provider/key mutations. Gateway requires the API-key pepper ring and provider master ring. Worker requires only rings used by its enabled jobs/reconciliation duties. ADR 0004 defines the trust boundary.
 - `TLS_MODE=files` requires readable certificate/key files. `TLS_MODE=acme` requires email, supported DNS provider, and DNS API token file.
 - `ENABLE_CLOUDFLARE_TUNNEL=true` requires HTTPS public URL/host consistency, tunnel ID, credential file, and accepted profile configuration.
 - `ENABLE_TAILSCALE_PRIVATE_ADMIN=true` is rejected until ADR 0002 is Accepted; afterward it requires private admin exposure, auth key, state directory, non-overlapping addresses, and approved routes.
-- Bootstrap identity fields and password file are required only by the explicit bootstrap command and are ignored/rejected by long-running services.
+- Bootstrap identity fields and password file are required only by the functional Phase 4 bootstrap command and are ignored/rejected by long-running services. The Phase 1 help/version CLI scaffold performs no identity mutation and must not read them. The Phase 4 CLI hashes plaintext with validated application Argon2id parameters before database invocation; only the encoded hash enters the bounded transaction/function. Functional bootstrap uses the control-plane database login and receives neither cluster-admin nor migration credentials.
 
 ## Traefik and TLS
 
@@ -231,11 +243,16 @@ Trusted proxy count/CIDRs are explicit so source IP cannot be spoofed through fo
 ## PostgreSQL Operations
 
 - Use a pinned supported PostgreSQL major version.
+- Trusted Phase 2 empty-volume init assets use `nexusrelay_cluster_admin` to create the application database, all five fixed `LOGIN` principals, and the closed foundational role graph: `nexusrelay_schema_owner`, `nexusrelay_security_definer_owner`, `nexusrelay_gateway_runtime`, `nexusrelay_control_plane_runtime`, and `nexusrelay_worker_runtime`. They revoke unsafe `PUBLIC` schema creation and establish enough bounded migration connection/temp/schema bootstrap authority for the first Atlas run.
+- `nexusrelay_migration` is non-superuser, `NOBYPASSRLS`, `NOCREATEROLE`, and role-level `NOINHERIT`. Its memberships in `nexusrelay_schema_owner` and `nexusrelay_security_definer_owner` each have `ADMIN FALSE, INHERIT FALSE, SET TRUE`, so it must explicitly `SET ROLE`. Each runtime LOGIN has role-level `INHERIT`, and its sole runtime-role membership has `ADMIN FALSE, INHERIT TRUE, SET FALSE`, so runtime privileges are inherited while `SET ROLE` and membership administration are denied.
+- All five foundational `NOLOGIN` roles have role-level `NOINHERIT` as a defensive default and are non-superuser, `NOBYPASSRLS`, and `NOCREATEROLE`. In PostgreSQL 18 this role attribute controls the default for memberships where that role is the member; it does not override the explicit per-membership `inherit_option` above. Runtime roles own no SQL objects because inherited privileges without `SET ROLE` must not provide a path to owner identity; only the two owner roles own application objects.
+- `nexusrelay_cluster_admin` is the official-image bootstrap superuser and has `rolcanlogin`, `rolsuper`, `rolbypassrls`, `rolcreaterole`, and `rolinherit` true. Migration and runtime logins have only `rolcanlogin` true plus the documented migration `rolinherit=false` or runtime `rolinherit=true`; all five foundational roles have all five queried attributes false. Its superuser power is why cluster-admin mounting and use are restricted to the explicitly documented lifecycle operations.
+- Phase 3 migrations explicitly `SET ROLE` to create objects under the correct owner and grant privileges to the pre-existing runtime roles. No standing Atlas role-creation authority exists. A graph change is an exceptional deployment upgrade through an explicit audited cluster-admin provisioning command/runbook before Atlas, never hidden in a normal migration.
 - Application pools have configured per-process maximum/minimum sizes and statement/transaction timeouts. Transaction timeout is enforced through PostgreSQL transaction-local settings; statement timeout is the upper bound for ordinary statements, with explicitly reviewed worker operations allowed a narrower dedicated override.
 - Long-running worker queries use separate pool limits from gateway.
 - Migrations run once through the pinned Atlas Community CLI container after directory validation and under Atlas's PostgreSQL advisory lock. `atlas.sum`, revision-history integrity, lock contention, and failure recovery are release-tested per ADR 0007. Atlas Cloud and Atlas Pro migration linting are not required.
 - Automated backups include regular full backups plus WAL/point-in-time strategy where operator infrastructure supports it.
-- Restore runbook verifies application startup, RLS, encryption keys, and outbox resumption.
+- Restore and exceptional role-graph upgrade runbooks verify application startup, RLS, encryption keys, outbox resumption, ownership, every exact `pg_auth_members` edge option, and the documented `pg_roles` attributes before Atlas or runtime startup.
 
 ## Redis Operations
 
@@ -307,6 +324,7 @@ No user, key, request, organization, or arbitrary model IDs are labels.
 - No Docker socket mount.
 - Explicit writable temp paths and resource limits.
 - Database roles follow least privilege and RLS separation.
+- Cluster-admin, migration, gateway, control-plane, and worker database credentials have distinct paths and values. PostgreSQL initialization is the sole process that receives all five; Atlas and runtime containers receive only their own. Initialization and integration tests query `pg_auth_members.admin_option`, `inherit_option`, and `set_option` for all five required edges and query `pg_roles` for `rolcanlogin`, `rolsuper`, `rolbypassrls`, `rolcreaterole`, and `rolinherit`. Tests reject reused paths/values, incorrect fixed principal names, `POSTGRES_DB`/`DATABASE_NAME` mismatch, missing or extra edges, wrong edge options, wrong role attributes, cross-runtime inheritance, and cluster-admin use during normal migration/application startup.
 - Master key/pepper/session secrets are distinct and independently rotatable.
 - Debug endpoints/profilers are disabled or internal/authenticated in production.
 

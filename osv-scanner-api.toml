@@ -1,0 +1,9 @@
+[[IgnoredVulns]]
+id = "GHSA-mh99-v99m-4gvg"
+ignoreUntil = 2026-10-26
+reason = "openapi-typescript 7.13.0 is current and its latest compatible @redocly/openapi-core 1.x dependency still uses minimatch 5; the scanner runs only against the repository-owned OpenAPI contract."
+
+[[IgnoredVulns]]
+id = "GHSA-52cp-r559-cp3m"
+ignoreUntil = 2026-10-26
+reason = "openapi-typescript 7.13.0 is current and its latest compatible @redocly/openapi-core 1.x dependency pins js-yaml 4.2.0; it parses only the repository-owned OpenAPI contract."

@@ -1,0 +1,26 @@
+vulnerabilities:
+  - id: CVE-2026-45623
+    purls:
+      - pkg:npm/postcss@8.4.31
+    expired_at: 2026-10-26
+    statement: Next.js 16.2.12 is the current stable owner and pins postcss 8.4.31 exactly; no compatible stable owner upgrade is available.
+  - id: GHSA-r28c-9q8g-f849
+    purls:
+      - pkg:npm/postcss@8.4.31
+    expired_at: 2026-10-26
+    statement: Next.js 16.2.12 is the current stable owner and pins postcss 8.4.31 exactly; no compatible stable owner upgrade is available.
+  - id: GHSA-f88m-g3jw-g9cj
+    purls:
+      - pkg:npm/sharp@0.34.5
+    expired_at: 2026-10-26
+    statement: Next.js 16.2.12 permits only sharp 0.34.x and the advisory is fixed in 0.35.0; no compatible stable owner upgrade is available.
+  - id: GHSA-hrxh-6v49-42gf
+    purls:
+      - pkg:golang/google.golang.org/grpc@v1.79.3
+    expired_at: 2026-10-26
+    statement: The current pinned Atlas 1.2.3 community image embeds this dependency; replacing that approved migration image is outside the Phase 1 CI repair scope.
+  - id: CVE-2026-39822
+    purls:
+      - pkg:golang/stdlib@v1.26.4
+    expired_at: 2026-10-26
+    statement: The current pinned Atlas 1.2.3 community image was built with this Go version; replacing that approved migration image is outside the Phase 1 CI repair scope.

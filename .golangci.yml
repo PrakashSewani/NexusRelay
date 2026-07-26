@@ -1,0 +1,28 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  exclusions:
+    warn-unused: true
+    rules:
+      - path: ^apps/bootstrap/main\.go$
+        linters: [errcheck]
+        text: Error return value of `fmt\.Fprintln` is not checked
+      - path: ^internal/buildinfo/buildinfo\.go$
+        linters: [errcheck]
+        text: Error return value of `fmt\.Fprintf` is not checked
+      - path: ^internal/config/cmd/validate-deployment/main\.go$
+        linters: [errcheck]
+        text: Error return value of `fmt\.Fprint(ln|f)` is not checked
+      - path: ^internal/config/(config\.go|config_test\.go|envfile\.go|secret\.go)$
+        linters: [errcheck]
+        text: Error return value of `file\.Close` is not checked
+      - path: ^internal/httpserver/server_test\.go$
+        linters: [errcheck]
+        text: Error return value of `(response\.Body|listener)\.Close` is not checked
+      - path: ^internal/runtime/runtime_test\.go$
+        linters: [errcheck]
+        text: Error return value of `response\.Body\.Close` is not checked

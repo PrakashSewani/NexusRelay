@@ -2,7 +2,7 @@
 
 NexusRelay is a self-hosted, multi-tenant LLM gateway designed to give applications one stable OpenAI-compatible API while centralizing provider access, model routing, policy enforcement, usage accounting, budgets, health, analytics, and audit history.
 
-> **Project status:** Architecture and implementation planning are in progress. The V1 design is defined, but the runtime services and deployment artifacts are not implemented yet. Provider adapters and coding-agent exporters are enabled only after their external contracts are verified from authoritative sources.
+> **Project status:** Phase 1 repository foundation is complete. The repository contains compileable Go service entrypoints, a strict Next.js shell, typed configuration, the versioned control-plane OpenAPI skeleton, pinned non-root images, migration tooling, and CI/security gates. The services currently expose operational scaffolding only, and the checked-in Compose fragment is non-runnable Phase 2 groundwork; PostgreSQL, Redis, Traefik, complete secret mounts, and functional product APIs are not implemented yet. Provider adapters and coding-agent exporters are enabled only after their external contracts are verified from authoritative sources.
 
 ## Problem Statement
 
@@ -41,7 +41,7 @@ Compatibility is explicit and capability-gated. NexusRelay does not claim suppor
 - SSRF-aware custom URL validation, controlled DNS resolution, redirect restrictions, and named private-network policies
 - Sanitized provider errors with no credential or raw upstream-body disclosure
 
-Provider research status is tracked in [`docs/providers/`](docs/providers/). OpenAI, Anthropic, Ollama, and the bounded custom OpenAI-compatible adapter contract are verified for implementation. Gemini, OpenRouter, and Groq remain `profile_drafted` pending exact finish, Responses lifecycle, or final stream-usage contracts. Custom endpoint facts remain operator-asserted, and no adapter or runtime service exists yet.
+Provider research status is tracked in [`docs/providers/`](docs/providers/). OpenAI, Anthropic, Ollama, and the bounded custom OpenAI-compatible adapter contract are verified for implementation. Gemini, OpenRouter, and Groq remain `profile_drafted` pending exact finish, Responses lifecycle, or final stream-usage contracts. Custom endpoint facts remain operator-asserted, and no provider adapter exists yet.
 
 Xiaomi MiMo and CommandCode Provider API remain blocked. Before V1 scope freeze, each must be verified, explicitly redefined as a bounded profile through requirements/design, or removed/deferred from the V1 baseline; insufficient evidence cannot be filled by inference.
 
@@ -216,12 +216,12 @@ The core profile is designed to run locally or privately without Cloudflare, Tai
 
 ## Implementation Readiness
 
-The architecture has completed the documented **Phase 0 research and decision gates**. Phase 1 repository scaffolding is the next implementation stage. Phase 0 freezes representative public wire fixtures and the decisions needed to begin implementation. Exhaustive gateway compatibility is incremental: Models and Chat are gated in Phase 6, and Responses and Embeddings extend the same harness in Phase 10. The following artifacts and contracts continue to gate later provider and public endpoint work:
+The documented **Phase 0 research and decision gates** and **Phase 1 repository foundation** are complete. Phase 2 is the next implementation stage and must turn the existing non-runnable Compose groundwork into the generic localhost core with PostgreSQL, Redis, Traefik, migrations, protected secrets, and real readiness initialization. Exhaustive gateway compatibility remains incremental: Models and Chat are gated in Phase 6, and Responses and Embeddings extend the same harness in Phase 10. The following artifacts and contracts continue to gate later provider and public endpoint work:
 
 - Authoritative provider profiles and specified deterministic contract fixtures
 - A verified OpenCode exporter profile and pinned golden artifacts
 - Pinned official OpenAI SDK versions and representative protocol golden fixtures in [`docs/testing/openai-sdk-compatibility.md`](docs/testing/openai-sdk-compatibility.md)
-- Control-plane OpenAPI tooling selected by ADR 0006; the versioned source-contract skeleton is created in Phase 1 and expanded with each administrative subsystem
+- Control-plane OpenAPI tooling selected by ADR 0006; the versioned Phase 1 source-contract skeleton is checked in and expands with each administrative subsystem
 - Migration implementation using the Atlas Community tooling selected by ADR 0007
 - Redis limiter implementation using the fixed-window Redis Function design selected by ADR 0008
 

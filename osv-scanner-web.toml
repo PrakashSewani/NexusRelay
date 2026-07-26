@@ -1,0 +1,24 @@
+[[IgnoredVulns]]
+id = "GHSA-mh99-v99m-4gvg"
+ignoreUntil = 2026-10-26
+reason = "ESLint 10 removes this vulnerable path, but eslint-plugin-react 7.37.5 in the current eslint-config-next 16.2.12 stack fails at runtime under ESLint 10; the lockfile has only this build-time ESLint path."
+
+[[IgnoredVulns]]
+id = "GHSA-6g55-p6wh-862q"
+ignoreUntil = 2026-10-26
+reason = "Next.js 16.2.12 is the current stable owner and pins postcss 8.4.31 exactly; no compatible stable owner upgrade is available."
+
+[[IgnoredVulns]]
+id = "GHSA-qx2v-qp2m-jg93"
+ignoreUntil = 2026-10-26
+reason = "Next.js 16.2.12 is the current stable owner and pins postcss 8.4.31 exactly; no compatible stable owner upgrade is available."
+
+[[IgnoredVulns]]
+id = "GHSA-r28c-9q8g-f849"
+ignoreUntil = 2026-10-26
+reason = "Next.js 16.2.12 is the current stable owner and pins postcss 8.4.31 exactly; no compatible stable owner upgrade is available."
+
+[[IgnoredVulns]]
+id = "GHSA-f88m-g3jw-g9cj"
+ignoreUntil = 2026-10-26
+reason = "Next.js 16.2.12 permits only sharp 0.34.x and the advisory is fixed in 0.35.0; no compatible stable owner upgrade is available."

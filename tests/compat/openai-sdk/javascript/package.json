@@ -1,0 +1,11 @@
+{
+  "name": "nexusrelay-openai-sdk-js-fixtures",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node replay.mjs"
+  },
+  "dependencies": {
+    "openai": "6.49.0"
+  }
+}

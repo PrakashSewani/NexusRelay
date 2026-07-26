@@ -1,0 +1,195 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  dependencies:
+    name: Dependency scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Set up Go
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version-file: go.mod
+      - name: Scan root Go dependencies
+        id: govuln-root
+        continue-on-error: true
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 -json ./... > govulncheck-root.json
+      - name: Scan Go SDK dependencies
+        id: govuln-sdk
+        continue-on-error: true
+        run: go -C tests/compat/openai-sdk/go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 -json ./... > govulncheck-sdk.json
+      - name: Scan web dependencies
+        id: osv-web
+        continue-on-error: true
+        run: >-
+          docker run --rm -v "$PWD:/src"
+          ghcr.io/google/osv-scanner:v2.4.0@sha256:5116601dedc01c1c580eb92371883ec052fc4c13c3fbc109d621a63ac416d475
+          scan source --format=json --output-file=/src/osv-web.json
+          --config=/src/osv-scanner-web.toml --lockfile=/src/pnpm-lock.yaml
+      - name: Scan API tooling dependencies
+        id: osv-api
+        continue-on-error: true
+        run: >-
+          docker run --rm -v "$PWD:/src"
+          ghcr.io/google/osv-scanner:v2.4.0@sha256:5116601dedc01c1c580eb92371883ec052fc4c13c3fbc109d621a63ac416d475
+          scan source --format=json --output-file=/src/osv-api.json
+          --config=/src/osv-scanner-api.toml --lockfile=/src/api/control/v1/pnpm-lock.yaml
+      - name: Scan JavaScript SDK dependencies
+        id: osv-sdk-javascript
+        continue-on-error: true
+        run: >-
+          docker run --rm -v "$PWD:/src"
+          ghcr.io/google/osv-scanner:v2.4.0@sha256:5116601dedc01c1c580eb92371883ec052fc4c13c3fbc109d621a63ac416d475
+          scan source --format=json --output-file=/src/osv-sdk-javascript.json
+          --lockfile=/src/tests/compat/openai-sdk/javascript/package-lock.json
+      - name: Scan Python SDK dependencies
+        id: osv-sdk-python
+        continue-on-error: true
+        run: >-
+          docker run --rm
+          -v "$PWD:/src"
+          -v "$PWD/tests/compat/openai-sdk/python/requirements.lock:/scan/requirements.txt:ro"
+          ghcr.io/google/osv-scanner:v2.4.0@sha256:5116601dedc01c1c580eb92371883ec052fc4c13c3fbc109d621a63ac416d475
+          scan source --format=json --output-file=/src/osv-sdk-python.json
+          --lockfile=/scan/requirements.txt
+      - name: Retain dependency scan reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dependency-scan-reports
+          path: |
+            govulncheck-*.json
+            osv-*.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Enforce dependency scan results
+        if: always()
+        env:
+          GOVULN_ROOT: ${{ steps.govuln-root.outcome }}
+          GOVULN_SDK: ${{ steps.govuln-sdk.outcome }}
+          OSV_WEB: ${{ steps.osv-web.outcome }}
+          OSV_API: ${{ steps.osv-api.outcome }}
+          OSV_SDK_JAVASCRIPT: ${{ steps.osv-sdk-javascript.outcome }}
+          OSV_SDK_PYTHON: ${{ steps.osv-sdk-python.outcome }}
+        run: |
+          test "$GOVULN_ROOT" = success
+          test "$GOVULN_SDK" = success
+          test "$OSV_WEB" = success
+          test "$OSV_API" = success
+          test "$OSV_SDK_JAVASCRIPT" = success
+          test "$OSV_SDK_PYTHON" = success
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 0
+      - name: Scan full Git history
+        run: >-
+          docker run --rm
+          -e GIT_CONFIG_COUNT=1
+          -e GIT_CONFIG_KEY_0=safe.directory
+          -e GIT_CONFIG_VALUE_0=/repo
+          -v "$PWD:/repo:ro"
+          -w /repo
+          ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+          git --redact --no-banner .
+
+  images:
+    name: Image scan (${{ matrix.image }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: app
+            target: image-build-go
+            tag: nexusrelay-app:ci
+          - image: web
+            target: image-build-web
+            tag: nexusrelay-web:ci
+          - image: migrate
+            target: image-build-migrate
+            tag: nexusrelay-migrate:ci
+    env:
+      VERSION: ci
+      REVISION: ${{ github.sha }}
+      IMAGE_TAG: ci
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Set source date epoch
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> "$GITHUB_ENV"
+      - name: Build image
+        run: make ${{ matrix.target }}
+      - name: Save image without scanner socket access
+        run: docker save --output "${{ matrix.image }}.tar" "${{ matrix.tag }}"
+      - name: Scan image archive
+        id: vulnerability-scan
+        continue-on-error: true
+        run: >-
+          docker run --rm
+          -v "$PWD:/work"
+          ghcr.io/aquasecurity/trivy:0.72.0@sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f
+          image
+          --input "/work/${{ matrix.image }}.tar"
+          --ignorefile /work/.trivyignore.yaml
+          --scanners vuln
+          --severity HIGH,CRITICAL
+          --exit-code 1
+          --exit-on-eol 1
+          --disable-telemetry
+          --no-progress
+          --show-suppressed
+          --format json
+          --output "/work/${{ matrix.image }}-vulnerabilities.json"
+      - name: Generate image SBOM
+        if: always()
+        run: >-
+          docker run --rm
+          -v "$PWD:/work"
+          ghcr.io/aquasecurity/trivy:0.72.0@sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f
+          image
+          --input "/work/${{ matrix.image }}.tar"
+          --scanners vuln
+          --disable-telemetry
+          --no-progress
+          --format cyclonedx
+          --output "/work/${{ matrix.image }}.cdx.json"
+      - name: Retain image scan report and SBOM
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: image-security-${{ matrix.image }}
+          path: |
+            ${{ matrix.image }}-vulnerabilities.json
+            ${{ matrix.image }}.cdx.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Enforce image vulnerability result
+        if: always()
+        env:
+          VULNERABILITY_SCAN: ${{ steps.vulnerability-scan.outcome }}
+        run: test "$VULNERABILITY_SCAN" = success
